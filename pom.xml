@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Helidon JAX-RS APT - Compile-time JAX-RS annotation processing for Helidon WebServer
+
+    This project demonstrates build-time code generation from JAX-RS annotations,
+    producing optimized Helidon routing code without runtime reflection.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.helidon.applications</groupId>
+        <artifactId>helidon-se</artifactId>
+        <version>4.3.3</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>io.helidon.examples</groupId>
+    <artifactId>helidon-examples-jaxrs-apt</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <name>Helidon Examples JAX-RS APT</name>
+    <description>Build-time annotation processing JAX-RS implementation for Helidon WebServer</description>
+
+    <properties>
+        <mainClass>io.helidon.examples.jaxrs.apt.Main</mainClass>
+    </properties>
+
+    <dependencies>
+        <!-- Helidon WebServer -->
+        <dependency>
+            <groupId>io.helidon.webserver</groupId>
+            <artifactId>helidon-webserver</artifactId>
+        </dependency>
+
+        <!-- Helidon Codegen for annotation processor -->
+        <dependency>
+            <groupId>io.helidon.codegen</groupId>
+            <artifactId>helidon-codegen-class-model</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- JAX-RS Annotations (API only, no runtime) -->
+        <dependency>
+            <groupId>jakarta.ws.rs</groupId>
+            <artifactId>jakarta.ws.rs-api</artifactId>
+        </dependency>
+
+        <!-- Jakarta Annotations (for @Priority) -->
+        <dependency>
+            <groupId>jakarta.annotation</groupId>
+            <artifactId>jakarta.annotation-api</artifactId>
+        </dependency>
+
+        <!-- JSON Processing -->
+        <dependency>
+            <groupId>io.helidon.http.media</groupId>
+            <artifactId>helidon-http-media-jackson</artifactId>
+        </dependency>
+
+        <!-- Logging -->
+        <dependency>
+            <groupId>io.helidon.logging</groupId>
+            <artifactId>helidon-logging-jul</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Test -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.helidon.webserver.testing.junit5</groupId>
+            <artifactId>helidon-webserver-testing-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Multi-phase compilation for annotation processing -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <executions>
+                    <!-- Phase 1: Compile processor without annotation processing -->
+                    <execution>
+                        <id>compile-processor</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                            <proc>none</proc>
+                            <includes>
+                                <include>**/processor/**</include>
+                                <include>**/runtime/**</include>
+                                <include>**/apt/User.java</include>
+                                <include>**/apt/UserResource.java</include>
+                                <include>**/apt/filter/**</include>
+                            </includes>
+                        </configuration>
+                    </execution>
+                    <!-- Phase 2: Run annotation processor -->
+                    <execution>
+                        <id>generate-routing</id>
+                        <phase>process-sources</phase>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                            <includes>
+                                <include>**/apt/UserResource.java</include>
+                                <include>**/apt/filter/**</include>
+                            </includes>
+                            <annotationProcessors>
+                                <annotationProcessor>io.helidon.examples.jaxrs.apt.processor.JaxRsProcessor</annotationProcessor>
+                            </annotationProcessors>
+                            <generatedSourcesDirectory>${project.build.directory}/generated-sources/annotations</generatedSourcesDirectory>
+                        </configuration>
+                    </execution>
+                    <!-- Phase 3: Final compilation -->
+                    <execution>
+                        <id>default-compile</id>
+                        <phase>compile</phase>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                            <proc>none</proc>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Add generated sources -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <version>3.6.1</version>
+                <executions>
+                    <execution>
+                        <id>add-generated-sources</id>
+                        <phase>process-sources</phase>
+                        <goals>
+                            <goal>add-source</goal>
+                        </goals>
+                        <configuration>
+                            <sources>
+                                <source>${project.build.directory}/generated-sources/annotations</source>
+                            </sources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Copy dependencies for executable JAR -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-libs</id>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
