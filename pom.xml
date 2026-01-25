@@ -197,6 +197,12 @@
                         </goals>
                         <configuration>
                             <proc>none</proc>
+                            <!-- Exclude Jersey comparison test (requires -Pjersey-comparison profile) -->
+                            <testExcludes>
+                                <testExclude>**/comparison/JerseyBehaviorTest.java</testExclude>
+                                <testExclude>**/comparison/JerseyTestApplication.java</testExclude>
+                                <testExclude>**/comparison/NotFoundExceptionMapper.java</testExclude>
+                            </testExcludes>
                         </configuration>
                     </execution>
                 </executions>
