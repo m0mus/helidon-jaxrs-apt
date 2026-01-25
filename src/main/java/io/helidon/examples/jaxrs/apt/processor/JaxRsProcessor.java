@@ -465,9 +465,9 @@ public class JaxRsProcessor extends AbstractProcessor {
     private BodyParamInfo extractParameters(ExecutableElement method, Method.Builder handler, List<String> paramNames) {
         BodyParamInfo bodyParam = null;
 
-        // First pass: check if we have any form params and cache the form data
+        // First pass: check if we have any form params (direct or in BeanParam) and cache the form data
         boolean hasFormParams = method.getParameters().stream()
-                .anyMatch(p -> p.getAnnotation(FormParam.class) != null);
+                .anyMatch(p -> p.getAnnotation(FormParam.class) != null || hasFormParamInBean(p));
 
         if (hasFormParams) {
             handler.addContentLine("io.helidon.common.parameters.Parameters _formParams = req.content().as(io.helidon.common.parameters.Parameters.class);");
@@ -733,6 +733,7 @@ public class JaxRsProcessor extends AbstractProcessor {
                 && param.getAnnotation(CookieParam.class) == null
                 && param.getAnnotation(FormParam.class) == null
                 && param.getAnnotation(Context.class) == null
+                && param.getAnnotation(BeanParam.class) == null
                 && !isPrimitive(param.asType().toString());
     }
 
@@ -779,7 +780,145 @@ public class JaxRsProcessor extends AbstractProcessor {
             return generateContextParam(handler, varName, type);
         }
 
+        BeanParam beanParam = param.getAnnotation(BeanParam.class);
+        if (beanParam != null) {
+            generateBeanParam(handler, typeName, varName, param.asType());
+            return varName;
+        }
+
         return null;
+    }
+
+    private void generateBeanParam(Method.Builder handler, TypeName typeName, String varName, TypeMirror beanType) {
+        // Create bean instance
+        handler.addContent(typeName).addContent(" ").addContent(varName)
+                .addContent(" = new ").addContent(typeName).addContentLine("();");
+
+        // Get the type element for the bean class
+        TypeElement beanElement = (TypeElement) processingEnv.getTypeUtils().asElement(beanType);
+        if (beanElement == null) {
+            return;
+        }
+
+        // Process all fields in the bean
+        for (Element enclosed : beanElement.getEnclosedElements()) {
+            if (enclosed.getKind() == ElementKind.FIELD) {
+                VariableElement field = (VariableElement) enclosed;
+                generateBeanFieldExtraction(handler, varName, field);
+            }
+        }
+    }
+
+    private void generateBeanFieldExtraction(Method.Builder handler, String beanVar, VariableElement field) {
+        String fieldName = field.getSimpleName().toString();
+        String fieldType = field.asType().toString();
+        String setterName = "set" + fieldName.substring(0, 1).toUpperCase() + fieldName.substring(1);
+
+        DefaultValue defaultValue = field.getAnnotation(DefaultValue.class);
+        String defaultVal = defaultValue != null ? defaultValue.value() : null;
+
+        PathParam pathParam = field.getAnnotation(PathParam.class);
+        if (pathParam != null) {
+            generateBeanFieldPathParam(handler, beanVar, setterName, pathParam.value(), fieldType);
+            return;
+        }
+
+        QueryParam queryParam = field.getAnnotation(QueryParam.class);
+        if (queryParam != null) {
+            generateBeanFieldQueryParam(handler, beanVar, setterName, queryParam.value(), fieldType, defaultVal);
+            return;
+        }
+
+        HeaderParam headerParam = field.getAnnotation(HeaderParam.class);
+        if (headerParam != null) {
+            generateBeanFieldHeaderParam(handler, beanVar, setterName, headerParam.value(), defaultVal);
+            return;
+        }
+
+        CookieParam cookieParam = field.getAnnotation(CookieParam.class);
+        if (cookieParam != null) {
+            generateBeanFieldCookieParam(handler, beanVar, setterName, cookieParam.value(), defaultVal);
+            return;
+        }
+
+        FormParam formParam = field.getAnnotation(FormParam.class);
+        if (formParam != null) {
+            generateBeanFieldFormParam(handler, beanVar, setterName, formParam.value(), fieldType, defaultVal);
+        }
+    }
+
+    private void generateBeanFieldPathParam(Method.Builder handler, String beanVar, String setter, String paramName, String type) {
+        String tempVar = "_bp_" + paramName.replace("-", "_");
+        handler.addContent("String ").addContent(tempVar).addContent(" = req.path().pathParameters().get(\"")
+                .addContent(escapeJavaString(paramName)).addContentLine("\");");
+
+        if (needsConversion(type)) {
+            handler.addContent("if (").addContent(tempVar).addContentLine(" != null) {");
+            handler.addContent("    ").addContent(beanVar).addContent(".").addContent(setter).addContent("(")
+                    .addContent(convertType(tempVar, type)).addContentLine(");");
+            handler.addContentLine("}");
+        } else {
+            handler.addContent(beanVar).addContent(".").addContent(setter).addContent("(")
+                    .addContent(tempVar).addContentLine(");");
+        }
+    }
+
+    private void generateBeanFieldQueryParam(Method.Builder handler, String beanVar, String setter, String paramName, String type, String defaultVal) {
+        String tempVar = "_bq_" + paramName.replace("-", "_");
+        String defaultExpr = defaultVal != null ? "\"" + escapeJavaString(defaultVal) + "\"" : "null";
+
+        handler.addContent("String ").addContent(tempVar).addContent(" = req.query().first(\"")
+                .addContent(escapeJavaString(paramName)).addContent("\").orElse(").addContent(defaultExpr).addContentLine(");");
+
+        if (needsConversion(type)) {
+            handler.addContent("if (").addContent(tempVar).addContentLine(" != null) {");
+            handler.addContent("    ").addContent(beanVar).addContent(".").addContent(setter).addContent("(")
+                    .addContent(convertType(tempVar, type)).addContentLine(");");
+            handler.addContentLine("}");
+        } else {
+            handler.addContent(beanVar).addContent(".").addContent(setter).addContent("(")
+                    .addContent(tempVar).addContentLine(");");
+        }
+    }
+
+    private void generateBeanFieldHeaderParam(Method.Builder handler, String beanVar, String setter, String paramName, String defaultVal) {
+        String tempVar = "_bh_" + paramName.replace("-", "_");
+        String defaultExpr = defaultVal != null ? "\"" + escapeJavaString(defaultVal) + "\"" : "null";
+
+        handler.addContent("String ").addContent(tempVar).addContent(" = req.headers().first(io.helidon.http.HeaderNames.create(\"")
+                .addContent(escapeJavaString(paramName)).addContent("\")).orElse(").addContent(defaultExpr).addContentLine(");");
+
+        handler.addContent(beanVar).addContent(".").addContent(setter).addContent("(")
+                .addContent(tempVar).addContentLine(");");
+    }
+
+    private void generateBeanFieldCookieParam(Method.Builder handler, String beanVar, String setter, String paramName, String defaultVal) {
+        String tempVar = "_bc_" + paramName.replace("-", "_");
+        String defaultExpr = defaultVal != null ? "\"" + escapeJavaString(defaultVal) + "\"" : "null";
+
+        handler.addContent("String ").addContent(tempVar).addContent(" = req.headers().cookies().first(\"")
+                .addContent(escapeJavaString(paramName)).addContent("\").orElse(").addContent(defaultExpr).addContentLine(");");
+
+        handler.addContent(beanVar).addContent(".").addContent(setter).addContent("(")
+                .addContent(tempVar).addContentLine(");");
+    }
+
+    private void generateBeanFieldFormParam(Method.Builder handler, String beanVar, String setter, String paramName, String type, String defaultVal) {
+        String tempVar = "_bf_" + paramName.replace("-", "_");
+        String defaultExpr = defaultVal != null ? "\"" + escapeJavaString(defaultVal) + "\"" : "null";
+
+        handler.addContent("String ").addContent(tempVar).addContent(" = _formParams.first(\"")
+                .addContent(escapeJavaString(paramName)).addContent("\").orElse(").addContent(defaultExpr).addContentLine(");");
+
+        if (needsConversion(type)) {
+            handler.addContent("if (").addContent(tempVar).addContentLine(" != null) {");
+            handler.addContent("    ").addContent(beanVar).addContent(".").addContent(setter).addContent("(")
+                    .addContent(convertType(tempVar, type)).addContentLine(");");
+            handler.addContentLine("}");
+        } else {
+            handler.addContent(beanVar).addContent(".").addContent(setter).addContent("(")
+                    .addContent(tempVar).addContentLine(");");
+        }
     }
 
     private void generatePathParam(Method.Builder handler, TypeName typeName, String varName, String paramName, String type) {
@@ -884,6 +1023,23 @@ public class JaxRsProcessor extends AbstractProcessor {
         return Set.of("int", "long", "double", "boolean",
                 "java.lang.String", "java.lang.Integer", "java.lang.Long",
                 "java.lang.Double", "java.lang.Boolean").contains(type);
+    }
+
+    private boolean hasFormParamInBean(VariableElement param) {
+        if (param.getAnnotation(BeanParam.class) == null) {
+            return false;
+        }
+        TypeElement beanElement = (TypeElement) processingEnv.getTypeUtils().asElement(param.asType());
+        if (beanElement == null) {
+            return false;
+        }
+        for (Element enclosed : beanElement.getEnclosedElements()) {
+            if (enclosed.getKind() == ElementKind.FIELD &&
+                enclosed.getAnnotation(FormParam.class) != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String escapeJavaString(String value) {
