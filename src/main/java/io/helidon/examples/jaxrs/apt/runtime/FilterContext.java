@@ -2,6 +2,8 @@ package io.helidon.examples.jaxrs.apt.runtime;
 
 import jakarta.ws.rs.container.ContainerRequestFilter;
 import jakarta.ws.rs.container.ContainerResponseFilter;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.ext.ExceptionMapper;
 import jakarta.ws.rs.ext.ReaderInterceptor;
 import jakarta.ws.rs.ext.WriterInterceptor;
 
@@ -10,7 +12,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Manages filters and interceptors with support for name bindings.
+ * Manages filters, interceptors, and exception mappers with support for name bindings.
  */
 public class FilterContext {
 
@@ -19,6 +21,7 @@ public class FilterContext {
     private final List<FilterEntry<ContainerResponseFilter>> responseFilters = new ArrayList<>();
     private final List<InterceptorEntry<ReaderInterceptor>> readerInterceptors = new ArrayList<>();
     private final List<InterceptorEntry<WriterInterceptor>> writerInterceptors = new ArrayList<>();
+    private final List<ExceptionMapperEntry<?>> exceptionMappers = new ArrayList<>();
 
     // Pre-matching filters (no name binding support)
     public void addPreMatchingRequestFilter(ContainerRequestFilter filter) {
@@ -81,6 +84,58 @@ public class FilterContext {
         return writerInterceptors;
     }
 
+    // Exception mappers
+    public <T extends Throwable> void addExceptionMapper(ExceptionMapper<T> mapper, Class<T> exceptionType) {
+        exceptionMappers.add(new ExceptionMapperEntry<>(mapper, exceptionType));
+    }
+
+    /**
+     * Find an exception mapper for the given exception.
+     * Returns null if no mapper is found.
+     * Searches for the most specific mapper (exact type match first, then superclasses).
+     */
+    @SuppressWarnings("unchecked")
+    public <T extends Throwable> ExceptionMapper<T> findExceptionMapper(T exception) {
+        Class<?> exceptionClass = exception.getClass();
+
+        // First try exact match
+        for (ExceptionMapperEntry<?> entry : exceptionMappers) {
+            if (entry.exceptionType().equals(exceptionClass)) {
+                return (ExceptionMapper<T>) entry.mapper();
+            }
+        }
+
+        // Then try superclass matches (find the most specific one)
+        ExceptionMapperEntry<?> bestMatch = null;
+        int bestDistance = Integer.MAX_VALUE;
+
+        for (ExceptionMapperEntry<?> entry : exceptionMappers) {
+            if (entry.exceptionType().isAssignableFrom(exceptionClass)) {
+                int distance = getInheritanceDistance(exceptionClass, entry.exceptionType());
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bestMatch = entry;
+                }
+            }
+        }
+
+        return bestMatch != null ? (ExceptionMapper<T>) bestMatch.mapper() : null;
+    }
+
+    private int getInheritanceDistance(Class<?> from, Class<?> to) {
+        int distance = 0;
+        Class<?> current = from;
+        while (current != null && !current.equals(to)) {
+            distance++;
+            current = current.getSuperclass();
+        }
+        return current != null ? distance : Integer.MAX_VALUE;
+    }
+
+    public List<ExceptionMapperEntry<?>> getExceptionMappers() {
+        return exceptionMappers;
+    }
+
     /**
      * Entry for a filter with its name bindings.
      */
@@ -123,4 +178,9 @@ public class FilterContext {
             return false;
         }
     }
+
+    /**
+     * Entry for an exception mapper with its exception type.
+     */
+    public record ExceptionMapperEntry<T extends Throwable>(ExceptionMapper<T> mapper, Class<T> exceptionType) {}
 }

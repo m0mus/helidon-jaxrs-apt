@@ -62,6 +62,7 @@ public class JaxRsProcessor extends AbstractProcessor {
     private List<FilterInfo> responseFilters;
     private List<FilterInfo> readerInterceptors;
     private List<FilterInfo> writerInterceptors;
+    private List<ExceptionMapperInfo> exceptionMappers;
 
     @Override
     public synchronized void init(ProcessingEnvironment processingEnv) {
@@ -82,6 +83,7 @@ public class JaxRsProcessor extends AbstractProcessor {
         responseFilters = new ArrayList<>();
         readerInterceptors = new ArrayList<>();
         writerInterceptors = new ArrayList<>();
+        exceptionMappers = new ArrayList<>();
 
         collectFiltersAndInterceptors(roundEnv);
         sortFiltersByPriority();
@@ -127,7 +129,29 @@ public class JaxRsProcessor extends AbstractProcessor {
                 writerInterceptors.add(info);
                 log("Found writer interceptor: " + typeElement.getQualifiedName() + " (priority=" + priority + ")");
             }
+
+            // Check for ExceptionMapper
+            String exceptionType = getExceptionMapperType(typeElement);
+            if (exceptionType != null) {
+                exceptionMappers.add(new ExceptionMapperInfo(typeElement, exceptionType, priority));
+                log("Found exception mapper: " + typeElement.getQualifiedName() + " for " + exceptionType + " (priority=" + priority + ")");
+            }
         }
+    }
+
+    private String getExceptionMapperType(TypeElement typeElement) {
+        for (TypeMirror iface : typeElement.getInterfaces()) {
+            String ifaceStr = iface.toString();
+            if (ifaceStr.startsWith("jakarta.ws.rs.ext.ExceptionMapper<")) {
+                // Extract the type parameter
+                int start = ifaceStr.indexOf('<') + 1;
+                int end = ifaceStr.lastIndexOf('>');
+                if (start > 0 && end > start) {
+                    return ifaceStr.substring(start, end);
+                }
+            }
+        }
+        return null;
     }
 
     private void sortFiltersByPriority() {
@@ -137,6 +161,8 @@ public class JaxRsProcessor extends AbstractProcessor {
         responseFilters.sort(byPriority.reversed()); // Response filters run in reverse order
         readerInterceptors.sort(byPriority);
         writerInterceptors.sort(byPriority);
+        // Exception mappers: lower priority = higher precedence (checked first)
+        exceptionMappers.sort(Comparator.comparingInt(e -> e.priority));
     }
 
     private void processResourceClasses(RoundEnvironment roundEnv) {
@@ -285,7 +311,17 @@ public class JaxRsProcessor extends AbstractProcessor {
             addFilterRegistrations(ctor, responseFilters, "addResponseFilter");
             addFilterRegistrations(ctor, readerInterceptors, "addReaderInterceptor");
             addFilterRegistrations(ctor, writerInterceptors, "addWriterInterceptor");
+            addExceptionMapperRegistrations(ctor);
         });
+    }
+
+    private void addExceptionMapperRegistrations(io.helidon.codegen.classmodel.Constructor.Builder ctor) {
+        for (ExceptionMapperInfo mapper : exceptionMappers) {
+            TypeName mapperType = TypeName.create(mapper.typeElement.getQualifiedName().toString());
+            ctor.addContent("this.filterContext.addExceptionMapper(new ")
+                    .addContent(mapperType).addContent("(), ")
+                    .addContent(mapper.exceptionType).addContentLine(".class);");
+        }
     }
 
     private void addFilterRegistrations(io.helidon.codegen.classmodel.Constructor.Builder ctor,
@@ -638,75 +674,131 @@ public class JaxRsProcessor extends AbstractProcessor {
     }
 
     private void generateExceptionHandling(Method.Builder handler) {
-        // Catch NotFoundException specifically (returns 404)
-        handler.addContent("} catch (").addContent(NOT_FOUND_EXCEPTION).addContentLine(" e) {");
+        // First catch all exceptions and check for custom ExceptionMapper
+        handler.addContentLine("} catch (Throwable _ex) {");
         handler.increaseContentPadding();
+        handler.addContentLine("// Check for custom ExceptionMapper");
+        handler.addContentLine("@SuppressWarnings(\"unchecked\")");
+        handler.addContentLine("jakarta.ws.rs.ext.ExceptionMapper<Throwable> _mapper = ");
+        handler.addContentLine("    (jakarta.ws.rs.ext.ExceptionMapper<Throwable>) filterContext.findExceptionMapper(_ex);");
+        handler.addContentLine("if (_mapper != null) {");
+        handler.increaseContentPadding();
+        handler.addContentLine("jakarta.ws.rs.core.Response _mapperResponse = _mapper.toResponse(_ex);");
+        handler.addContentLine("int _status = _mapperResponse.getStatus();");
+        handler.addContentLine("Object _entity = _mapperResponse.getEntity();");
+        handler.addContent(RESPONSE_CONTEXT).addContentLine(" responseContext = new " + RESPONSE_CONTEXT + "(_status, _entity);");
+        handler.addContentLine("try {");
+        handler.increaseContentPadding();
+        generateResponseFilters(handler);
+        handler.decreaseContentPadding();
+        handler.addContentLine("} catch (java.io.IOException ioEx) { /* suppressed */ }");
+        handler.addContentLine("for (var _hdr : _mapperResponse.getStringHeaders().entrySet()) {");
+        handler.addContentLine("    for (var _val : _hdr.getValue()) {");
+        handler.addContentLine("        res.header(io.helidon.http.HeaderNames.create(_hdr.getKey()), _val);");
+        handler.addContentLine("    }");
+        handler.addContentLine("}");
+        handler.addContentLine("if (_entity != null) {");
+        handler.addContentLine("    if (_entity instanceof String) {");
+        handler.addContentLine("        res.status(_status).send((String) _entity);");
+        handler.addContentLine("    } else {");
+        handler.addContentLine("        try {");
+        handler.addContentLine("            res.status(_status).send(objectMapper.writeValueAsString(_entity));");
+        handler.addContentLine("        } catch (Exception jsonEx) {");
+        handler.addContentLine("            res.status(_status).send(_entity.toString());");
+        handler.addContentLine("        }");
+        handler.addContentLine("    }");
+        handler.addContentLine("} else {");
+        handler.addContentLine("    res.status(_status).send();");
+        handler.addContentLine("}");
+        handler.addContentLine("return;");
+        handler.decreaseContentPadding();
+        handler.addContentLine("}");
+        handler.addContentLine("// No custom mapper found, use default exception handling");
+        // Now handle standard JAX-RS exceptions
+        handler.addContent("if (_ex instanceof ").addContent(NOT_FOUND_EXCEPTION).addContentLine(") {");
+        handler.increaseContentPadding();
+        handler.addContentLine("Exception e = (Exception) _ex;");
         generateErrorResponse(handler, 404, "Not Found");
         handler.decreaseContentPadding();
-        // Catch BadRequestException (returns 400)
-        handler.addContentLine("} catch (jakarta.ws.rs.BadRequestException e) {");
+        // BadRequestException (returns 400)
+        handler.addContentLine("} else if (_ex instanceof jakarta.ws.rs.BadRequestException) {");
         handler.increaseContentPadding();
+        handler.addContentLine("Exception e = (Exception) _ex;");
         generateErrorResponse(handler, 400, "Bad Request");
         handler.decreaseContentPadding();
-        // Catch NotAuthorizedException (returns 401)
-        handler.addContentLine("} catch (jakarta.ws.rs.NotAuthorizedException e) {");
+        // NotAuthorizedException (returns 401)
+        handler.addContentLine("} else if (_ex instanceof jakarta.ws.rs.NotAuthorizedException) {");
         handler.increaseContentPadding();
+        handler.addContentLine("Exception e = (Exception) _ex;");
         generateErrorResponse(handler, 401, "Unauthorized");
         handler.decreaseContentPadding();
-        // Catch ForbiddenException (returns 403)
-        handler.addContentLine("} catch (jakarta.ws.rs.ForbiddenException e) {");
+        // ForbiddenException (returns 403)
+        handler.addContentLine("} else if (_ex instanceof jakarta.ws.rs.ForbiddenException) {");
         handler.increaseContentPadding();
+        handler.addContentLine("Exception e = (Exception) _ex;");
         generateErrorResponse(handler, 403, "Forbidden");
         handler.decreaseContentPadding();
-        // Catch NotAllowedException (returns 405)
-        handler.addContentLine("} catch (jakarta.ws.rs.NotAllowedException e) {");
+        // NotAllowedException (returns 405)
+        handler.addContentLine("} else if (_ex instanceof jakarta.ws.rs.NotAllowedException) {");
         handler.increaseContentPadding();
+        handler.addContentLine("Exception e = (Exception) _ex;");
         generateErrorResponse(handler, 405, "Method Not Allowed");
         handler.decreaseContentPadding();
-        // Catch NotAcceptableException (returns 406)
-        handler.addContentLine("} catch (jakarta.ws.rs.NotAcceptableException e) {");
+        // NotAcceptableException (returns 406)
+        handler.addContentLine("} else if (_ex instanceof jakarta.ws.rs.NotAcceptableException) {");
         handler.increaseContentPadding();
+        handler.addContentLine("Exception e = (Exception) _ex;");
         generateErrorResponse(handler, 406, "Not Acceptable");
         handler.decreaseContentPadding();
-        // Catch NotSupportedException (returns 415)
-        handler.addContentLine("} catch (jakarta.ws.rs.NotSupportedException e) {");
+        // NotSupportedException (returns 415)
+        handler.addContentLine("} else if (_ex instanceof jakarta.ws.rs.NotSupportedException) {");
         handler.increaseContentPadding();
+        handler.addContentLine("Exception e = (Exception) _ex;");
         generateErrorResponse(handler, 415, "Unsupported Media Type");
         handler.decreaseContentPadding();
-        // Catch InternalServerErrorException (returns 500)
-        handler.addContentLine("} catch (jakarta.ws.rs.InternalServerErrorException e) {");
+        // InternalServerErrorException (returns 500)
+        handler.addContentLine("} else if (_ex instanceof jakarta.ws.rs.InternalServerErrorException) {");
         handler.increaseContentPadding();
+        handler.addContentLine("Exception e = (Exception) _ex;");
         generateErrorResponse(handler, 500, "Internal Server Error");
         handler.decreaseContentPadding();
-        // Catch ServiceUnavailableException (returns 503)
-        handler.addContentLine("} catch (jakarta.ws.rs.ServiceUnavailableException e) {");
+        // ServiceUnavailableException (returns 503)
+        handler.addContentLine("} else if (_ex instanceof jakarta.ws.rs.ServiceUnavailableException) {");
         handler.increaseContentPadding();
+        handler.addContentLine("Exception e = (Exception) _ex;");
         generateErrorResponse(handler, 503, "Service Unavailable");
         handler.decreaseContentPadding();
-        // Catch ClientErrorException (4xx errors) - avoid getResponse()
-        handler.addContentLine("} catch (jakarta.ws.rs.ClientErrorException e) {");
+        // ClientErrorException (4xx errors)
+        handler.addContentLine("} else if (_ex instanceof jakarta.ws.rs.ClientErrorException) {");
         handler.increaseContentPadding();
+        handler.addContentLine("Exception e = (Exception) _ex;");
         generateErrorResponse(handler, 400, "Client Error");
         handler.decreaseContentPadding();
-        // Catch ServerErrorException (5xx errors) - avoid getResponse()
-        handler.addContentLine("} catch (jakarta.ws.rs.ServerErrorException e) {");
+        // ServerErrorException (5xx errors)
+        handler.addContentLine("} else if (_ex instanceof jakarta.ws.rs.ServerErrorException) {");
         handler.increaseContentPadding();
+        handler.addContentLine("Exception e = (Exception) _ex;");
         generateErrorResponse(handler, 500, "Server Error");
         handler.decreaseContentPadding();
-        // Catch RedirectionException (3xx) - avoid getResponse()
-        handler.addContentLine("} catch (jakarta.ws.rs.RedirectionException e) {");
+        // RedirectionException (3xx)
+        handler.addContentLine("} else if (_ex instanceof jakarta.ws.rs.RedirectionException) {");
         handler.increaseContentPadding();
+        handler.addContentLine("Exception e = (Exception) _ex;");
         generateErrorResponse(handler, 307, "Redirect");
         handler.decreaseContentPadding();
-        // Catch generic WebApplicationException - avoid getResponse() which triggers RuntimeDelegate
-        handler.addContent("} catch (").addContent(WEB_APPLICATION_EXCEPTION).addContentLine(" e) {");
+        // WebApplicationException
+        handler.addContent("} else if (_ex instanceof ").addContent(WEB_APPLICATION_EXCEPTION).addContentLine(") {");
         handler.increaseContentPadding();
+        handler.addContentLine("Exception e = (Exception) _ex;");
         generateErrorResponse(handler, 500, "Error");
         handler.decreaseContentPadding();
-        // Catch all other exceptions
-        handler.addContentLine("} catch (Exception e) {");
+        // All other exceptions
+        handler.addContentLine("} else {");
         handler.increaseContentPadding();
+        handler.addContentLine("Exception e = (_ex instanceof Exception) ? (Exception) _ex : new RuntimeException(_ex);");
         generateErrorResponse(handler, 500, "Internal Server Error");
+        handler.decreaseContentPadding();
+        handler.addContentLine("}");
         handler.decreaseContentPadding();
         handler.addContentLine("}");
     }
@@ -1120,4 +1212,5 @@ public class JaxRsProcessor extends AbstractProcessor {
         }
     }
     private record BodyParamInfo(String name, String type) {}
+    private record ExceptionMapperInfo(TypeElement typeElement, String exceptionType, int priority) {}
 }
