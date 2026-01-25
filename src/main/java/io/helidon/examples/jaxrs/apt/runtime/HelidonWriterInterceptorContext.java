@@ -40,7 +40,12 @@ public class HelidonWriterInterceptorContext implements WriterInterceptorContext
         if (!proceeded) {
             proceeded = true;
             if (entity != null) {
-                result = objectMapper.writeValueAsString(entity);
+                // For text/plain with String entity, return as-is without JSON serialization
+                if (MediaType.TEXT_PLAIN_TYPE.isCompatible(mediaType) && entity instanceof String) {
+                    result = (String) entity;
+                } else {
+                    result = objectMapper.writeValueAsString(entity);
+                }
             } else {
                 result = "";
             }

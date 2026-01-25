@@ -272,6 +272,9 @@ public class JaxRsProcessor extends AbstractProcessor {
 
     private void addConstructor(ClassModel.Builder classBuilder, TypeName resourceTypeName) {
         classBuilder.addConstructor(ctor -> {
+            // Initialize RuntimeDelegate first to support JAX-RS exceptions
+            ctor.addContentLine("io.helidon.examples.jaxrs.apt.runtime.SimpleRuntimeDelegate.init();");
+
             ctor.accessModifier(AccessModifier.PUBLIC)
                     .addContent("this.resource = new ").addContent(resourceTypeName).addContentLine("();")
                     .addContent("this.objectMapper = new ").addContent(OBJECT_MAPPER).addContentLine("();")
@@ -386,15 +389,13 @@ public class JaxRsProcessor extends AbstractProcessor {
                         .addLine("Handler for {@link " + resourceClass.getSimpleName() + "#" + methodName + "}.")
                         .build());
 
-        handler.addContentLine("try {");
-        handler.increaseContentPadding();
-
-        // Create request context
+        // Create request context and method bindings before try block so they're accessible in catch blocks
         handler.addContent(REQUEST_CONTEXT).addContent(" requestContext = new ")
                 .addContent(REQUEST_CONTEXT).addContentLine("(req);");
-
-        // Method bindings for name-bound filter matching
         generateMethodBindings(handler, route.nameBindings);
+
+        handler.addContentLine("try {");
+        handler.increaseContentPadding();
 
         // Pre-matching filters
         generatePreMatchingFilters(handler);
@@ -464,6 +465,15 @@ public class JaxRsProcessor extends AbstractProcessor {
     private BodyParamInfo extractParameters(ExecutableElement method, Method.Builder handler, List<String> paramNames) {
         BodyParamInfo bodyParam = null;
 
+        // First pass: check if we have any form params and cache the form data
+        boolean hasFormParams = method.getParameters().stream()
+                .anyMatch(p -> p.getAnnotation(FormParam.class) != null);
+
+        if (hasFormParams) {
+            handler.addContentLine("io.helidon.common.parameters.Parameters _formParams = req.content().as(io.helidon.common.parameters.Parameters.class);");
+        }
+
+        // Second pass: extract all parameters
         for (VariableElement param : method.getParameters()) {
             if (isBodyParameter(param)) {
                 bodyParam = new BodyParamInfo(
@@ -523,15 +533,13 @@ public class JaxRsProcessor extends AbstractProcessor {
             handler.addContent(resultType).addContent(" result = ").addContent(invocation).addContentLine(";");
             handler.addContent(RESPONSE_CONTEXT).addContent(" responseContext = new ")
                     .addContent(RESPONSE_CONTEXT).addContentLine("(200, result);");
+
+            // JAX-RS order: Writer interceptors execute before response filters
+            generateWriterInterceptors(handler, contentType);
             generateResponseFilters(handler);
 
-            if (returnType.toString().equals("java.lang.String") && "text/plain".equals(produces)) {
-                handler.addContentLine("Object entity = responseContext.getEntity();");
-                handler.addContentLine("String body = entity != null ? entity.toString() : \"\";");
-                handler.addContentLine("res.status(responseContext.getStatus()).header(\"Content-Type\", \"text/plain\").send(body);");
-            } else {
-                generateWriterInterceptors(handler, contentType);
-            }
+            // Send the response after all filters/interceptors
+            handler.addContentLine("res.status(responseContext.getStatus()).header(\"Content-Type\", \"" + contentType + "\").send(_output);");
         }
     }
 
@@ -551,6 +559,11 @@ public class JaxRsProcessor extends AbstractProcessor {
         handler.addContent(WRITER_CONTEXT).addContent(" writerCtx = new ").addContent(WRITER_CONTEXT)
                 .addContentLine("(responseContext.getEntity(), objectMapper);");
 
+        // Set the media type so WriterInterceptorContext knows how to serialize
+        if ("text/plain".equals(contentType)) {
+            handler.addContentLine("writerCtx.setMediaType(jakarta.ws.rs.core.MediaType.TEXT_PLAIN_TYPE);");
+        }
+
         handler.addContentLine("for (var entry : filterContext.getWriterInterceptorsWithBindings()) {");
         handler.increaseContentPadding();
         handler.addContentLine("if (entry.matches(methodBindings)) {");
@@ -561,26 +574,97 @@ public class JaxRsProcessor extends AbstractProcessor {
         handler.decreaseContentPadding();
         handler.addContentLine("}");
 
-        handler.addContentLine("String json = writerCtx.getResult();");
-        handler.addContent("res.status(responseContext.getStatus()).header(\"Content-Type\", \"")
-                .addContent(contentType).addContentLine("\").send(json);");
+        // Get the serialized output - response is sent after response filters run
+        handler.addContentLine("String _output = writerCtx.getResult();");
     }
 
     private void generateExceptionHandling(Method.Builder handler) {
+        // Catch NotFoundException specifically (returns 404)
         handler.addContent("} catch (").addContent(NOT_FOUND_EXCEPTION).addContentLine(" e) {");
         handler.increaseContentPadding();
-        handler.addContentLine("res.status(404).send(e.getMessage() != null ? e.getMessage() : \"Not Found\");");
+        generateErrorResponse(handler, 404, "Not Found");
         handler.decreaseContentPadding();
+        // Catch BadRequestException (returns 400)
+        handler.addContentLine("} catch (jakarta.ws.rs.BadRequestException e) {");
+        handler.increaseContentPadding();
+        generateErrorResponse(handler, 400, "Bad Request");
+        handler.decreaseContentPadding();
+        // Catch NotAuthorizedException (returns 401)
+        handler.addContentLine("} catch (jakarta.ws.rs.NotAuthorizedException e) {");
+        handler.increaseContentPadding();
+        generateErrorResponse(handler, 401, "Unauthorized");
+        handler.decreaseContentPadding();
+        // Catch ForbiddenException (returns 403)
+        handler.addContentLine("} catch (jakarta.ws.rs.ForbiddenException e) {");
+        handler.increaseContentPadding();
+        generateErrorResponse(handler, 403, "Forbidden");
+        handler.decreaseContentPadding();
+        // Catch NotAllowedException (returns 405)
+        handler.addContentLine("} catch (jakarta.ws.rs.NotAllowedException e) {");
+        handler.increaseContentPadding();
+        generateErrorResponse(handler, 405, "Method Not Allowed");
+        handler.decreaseContentPadding();
+        // Catch NotAcceptableException (returns 406)
+        handler.addContentLine("} catch (jakarta.ws.rs.NotAcceptableException e) {");
+        handler.increaseContentPadding();
+        generateErrorResponse(handler, 406, "Not Acceptable");
+        handler.decreaseContentPadding();
+        // Catch NotSupportedException (returns 415)
+        handler.addContentLine("} catch (jakarta.ws.rs.NotSupportedException e) {");
+        handler.increaseContentPadding();
+        generateErrorResponse(handler, 415, "Unsupported Media Type");
+        handler.decreaseContentPadding();
+        // Catch InternalServerErrorException (returns 500)
+        handler.addContentLine("} catch (jakarta.ws.rs.InternalServerErrorException e) {");
+        handler.increaseContentPadding();
+        generateErrorResponse(handler, 500, "Internal Server Error");
+        handler.decreaseContentPadding();
+        // Catch ServiceUnavailableException (returns 503)
+        handler.addContentLine("} catch (jakarta.ws.rs.ServiceUnavailableException e) {");
+        handler.increaseContentPadding();
+        generateErrorResponse(handler, 503, "Service Unavailable");
+        handler.decreaseContentPadding();
+        // Catch ClientErrorException (4xx errors) - avoid getResponse()
+        handler.addContentLine("} catch (jakarta.ws.rs.ClientErrorException e) {");
+        handler.increaseContentPadding();
+        generateErrorResponse(handler, 400, "Client Error");
+        handler.decreaseContentPadding();
+        // Catch ServerErrorException (5xx errors) - avoid getResponse()
+        handler.addContentLine("} catch (jakarta.ws.rs.ServerErrorException e) {");
+        handler.increaseContentPadding();
+        generateErrorResponse(handler, 500, "Server Error");
+        handler.decreaseContentPadding();
+        // Catch RedirectionException (3xx) - avoid getResponse()
+        handler.addContentLine("} catch (jakarta.ws.rs.RedirectionException e) {");
+        handler.increaseContentPadding();
+        generateErrorResponse(handler, 307, "Redirect");
+        handler.decreaseContentPadding();
+        // Catch generic WebApplicationException - avoid getResponse() which triggers RuntimeDelegate
         handler.addContent("} catch (").addContent(WEB_APPLICATION_EXCEPTION).addContentLine(" e) {");
         handler.increaseContentPadding();
-        handler.addContentLine("int status = e.getResponse() != null ? e.getResponse().getStatus() : 500;");
-        handler.addContentLine("res.status(status).send(e.getMessage() != null ? e.getMessage() : \"Error\");");
+        generateErrorResponse(handler, 500, "Error");
         handler.decreaseContentPadding();
+        // Catch all other exceptions
         handler.addContentLine("} catch (Exception e) {");
         handler.increaseContentPadding();
-        handler.addContentLine("res.status(500).send(\"Internal Server Error: \" + e.getMessage());");
+        generateErrorResponse(handler, 500, "Internal Server Error");
         handler.decreaseContentPadding();
         handler.addContentLine("}");
+    }
+
+    private void generateErrorResponse(Method.Builder handler, int status, String defaultMessage) {
+        handler.addContent("String _errMsg = e.getMessage() != null ? e.getMessage() : \"").addContent(defaultMessage).addContentLine("\";");
+        handler.addContent(RESPONSE_CONTEXT).addContent(" responseContext = new ")
+                .addContent(RESPONSE_CONTEXT).addContent("(").addContent(String.valueOf(status)).addContentLine(", _errMsg);");
+        // Run response filters even for errors (JAX-RS spec)
+        handler.addContentLine("try {");
+        handler.increaseContentPadding();
+        generateResponseFilters(handler);
+        handler.decreaseContentPadding();
+        handler.addContentLine("} catch (java.io.IOException ioEx) {");
+        handler.addContentLine("    // Response filter IOException is suppressed in error handling");
+        handler.addContentLine("}");
+        handler.addContentLine("res.status(responseContext.getStatus()).send(_errMsg);");
     }
 
     private boolean isBodyParameter(VariableElement param) {
@@ -675,8 +759,8 @@ public class JaxRsProcessor extends AbstractProcessor {
         String defaultExpr = defaultVal != null ? "\"" + escapeJavaString(defaultVal) + "\"" : "null";
 
         handler.addContent(typeName).addContent(" ").addContent(varName)
-                .addContent(" = req.headers().first(\"").addContent(escapeJavaString(paramName))
-                .addContent("\").map(Object::toString).orElse(").addContent(defaultExpr).addContentLine(");");
+                .addContent(" = req.headers().first(io.helidon.http.HeaderNames.create(\"").addContent(escapeJavaString(paramName))
+                .addContent("\")).map(Object::toString).orElse(").addContent(defaultExpr).addContentLine(");");
     }
 
     private void generateCookieParam(Method.Builder handler, TypeName typeName, String varName, String paramName, String defaultVal) {
@@ -690,8 +774,9 @@ public class JaxRsProcessor extends AbstractProcessor {
     private void generateFormParam(Method.Builder handler, TypeName typeName, String varName, String paramName, String type, String defaultVal) {
         String defaultExpr = defaultVal != null ? "\"" + escapeJavaString(defaultVal) + "\"" : "null";
 
+        // Use cached _formParams instead of reading request body again
         handler.addContent("String _").addContent(varName)
-                .addContent(" = req.content().as(io.helidon.http.media.FormParams.class).first(\"")
+                .addContent(" = _formParams.first(\"")
                 .addContent(escapeJavaString(paramName)).addContent("\").orElse(").addContent(defaultExpr).addContentLine(");");
 
         if (needsConversion(type)) {
