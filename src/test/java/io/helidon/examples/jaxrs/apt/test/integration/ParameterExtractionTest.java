@@ -239,4 +239,62 @@ class ParameterExtractionTest {
 
         assertThat(response, is("id:456,filter:null,token:null"));
     }
+
+    // ==================== Response Return Type Tests ====================
+
+    @Test
+    @DisplayName("Simple Response - basic case")
+    void testResponseSimple() {
+        var response = client.get("/params/response/simple").request();
+
+        assertThat(response.status().code(), is(200));
+        assertThat(response.as(String.class), is("hello"));
+    }
+
+    @Test
+    @DisplayName("Response with custom status code 201")
+    void testResponseWithStatus() {
+        var response = client.get("/params/response/status").request();
+
+        assertThat(response.status().code(), is(201));
+        assertThat(response.as(String.class), is("created"));
+    }
+
+    @Test
+    @DisplayName("Response with JSON entity")
+    void testResponseWithJson() {
+        var response = client.get("/params/response/json").request();
+
+        assertThat(response.status().code(), is(200));
+        String body = response.as(String.class);
+        assertThat(body, containsString("\"name\":\"test\""));
+        assertThat(body, containsString("\"value\":42"));
+    }
+
+    @Test
+    @DisplayName("Response with custom headers")
+    void testResponseWithHeaders() {
+        var response = client.get("/params/response/headers").request();
+
+        assertThat(response.status().code(), is(200));
+        assertThat(response.headers().first(HeaderNames.create("X-Custom-Response")).orElse(""), is("custom-value"));
+        assertThat(response.headers().first(HeaderNames.create("X-Request-Id")).orElse(""), is("12345"));
+    }
+
+    @Test
+    @DisplayName("Response with no content (204)")
+    void testResponseNoContent() {
+        var response = client.delete("/params/response/nocontent").request();
+
+        assertThat(response.status().code(), is(204));
+    }
+
+    @Test
+    @DisplayName("Response with error status 400")
+    void testResponseError() {
+        var response = client.get("/params/response/error").request();
+
+        assertThat(response.status().code(), is(400));
+        assertThat(response.as(String.class), is("Bad request data"));
+    }
 }

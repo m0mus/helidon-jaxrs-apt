@@ -528,6 +528,9 @@ public class JaxRsProcessor extends AbstractProcessor {
                     .addContent(RESPONSE_CONTEXT).addContentLine("(204, null);");
             generateResponseFilters(handler);
             handler.addContentLine("res.status(responseContext.getStatus()).send();");
+        } else if (returnType.toString().equals("jakarta.ws.rs.core.Response")) {
+            // Handle Response return type
+            generateResponseHandling(handler, invocation, contentType);
         } else {
             TypeName resultType = TypeName.create(returnType.toString());
             handler.addContent(resultType).addContent(" result = ").addContent(invocation).addContentLine(";");
@@ -541,6 +544,62 @@ public class JaxRsProcessor extends AbstractProcessor {
             // Send the response after all filters/interceptors
             handler.addContentLine("res.status(responseContext.getStatus()).header(\"Content-Type\", \"" + contentType + "\").send(_output);");
         }
+    }
+
+    private void generateResponseHandling(Method.Builder handler, String invocation, String defaultContentType) {
+        handler.addContentLine("jakarta.ws.rs.core.Response _jaxrsResponse = " + invocation + ";");
+        handler.addContentLine("int _status = _jaxrsResponse.getStatus();");
+        handler.addContentLine("Object _entity = _jaxrsResponse.getEntity();");
+
+        // Determine content type from Response or use default
+        handler.addContent("String _contentType = _jaxrsResponse.getMediaType() != null ? ")
+                .addContent("_jaxrsResponse.getMediaType().toString() : \"").addContent(defaultContentType).addContentLine("\";");
+
+        // Create response context
+        handler.addContent(RESPONSE_CONTEXT).addContentLine(" responseContext = new " + RESPONSE_CONTEXT + "(_status, _entity);");
+
+        // Copy headers from Response to Helidon response
+        handler.addContentLine("for (var _hdr : _jaxrsResponse.getStringHeaders().entrySet()) {");
+        handler.addContentLine("    for (var _val : _hdr.getValue()) {");
+        handler.addContentLine("        res.header(io.helidon.http.HeaderNames.create(_hdr.getKey()), _val);");
+        handler.addContentLine("    }");
+        handler.addContentLine("}");
+
+        // Handle entity
+        handler.addContentLine("if (_entity != null) {");
+        handler.increaseContentPadding();
+
+        // For text/plain String entities, send directly without JSON serialization
+        handler.addContentLine("if (_contentType.startsWith(\"text/plain\") && _entity instanceof String) {");
+        handler.increaseContentPadding();
+        generateResponseFilters(handler);
+        handler.addContentLine("res.status(responseContext.getStatus()).header(\"Content-Type\", _contentType).send((String) _entity);");
+        handler.decreaseContentPadding();
+        handler.addContentLine("} else {");
+        handler.increaseContentPadding();
+
+        // JSON or other content types - use writer interceptors
+        handler.addContent(WRITER_CONTEXT).addContentLine(" writerCtx = new " + WRITER_CONTEXT + "(_entity, objectMapper);");
+        handler.addContentLine("for (var entry : filterContext.getWriterInterceptorsWithBindings()) {");
+        handler.addContentLine("    if (entry.matches(methodBindings)) {");
+        handler.addContentLine("        entry.interceptor().aroundWriteTo(writerCtx);");
+        handler.addContentLine("    }");
+        handler.addContentLine("}");
+        handler.addContentLine("String _output = writerCtx.getResult();");
+
+        generateResponseFilters(handler);
+
+        handler.addContentLine("res.status(responseContext.getStatus()).header(\"Content-Type\", _contentType).send(_output);");
+        handler.decreaseContentPadding();
+        handler.addContentLine("}");
+
+        handler.decreaseContentPadding();
+        handler.addContentLine("} else {");
+        handler.increaseContentPadding();
+        generateResponseFilters(handler);
+        handler.addContentLine("res.status(responseContext.getStatus()).send();");
+        handler.decreaseContentPadding();
+        handler.addContentLine("}");
     }
 
     private void generateResponseFilters(Method.Builder handler) {

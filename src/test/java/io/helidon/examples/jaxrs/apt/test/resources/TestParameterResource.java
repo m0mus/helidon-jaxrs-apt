@@ -4,6 +4,7 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriInfo;
 
 /**
@@ -160,4 +161,75 @@ public class TestParameterResource {
                                   @HeaderParam("X-Token") String token) {
         return "id:" + id + ",filter:" + (filter != null ? filter : "null") + ",token:" + (token != null ? token : "null");
     }
+
+    // ==================== Response Return Type Tests ====================
+
+    /**
+     * Test Response with custom status code.
+     */
+    @GET
+    @Path("/response/status")
+    @Produces(MediaType.TEXT_PLAIN)
+    public Response responseWithStatus() {
+        return Response.status(201)
+                .entity("created")
+                .build();
+    }
+
+    /**
+     * Test simple Response - most basic case.
+     */
+    @GET
+    @Path("/response/simple")
+    @Produces(MediaType.TEXT_PLAIN)
+    public Response responseSimple() {
+        return Response.ok("hello").build();
+    }
+
+    /**
+     * Test Response with JSON entity.
+     */
+    @GET
+    @Path("/response/json")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response responseWithJson() {
+        return Response.ok(new ResponseData("test", 42)).build();
+    }
+
+    /**
+     * Test Response with custom headers.
+     */
+    @GET
+    @Path("/response/headers")
+    @Produces(MediaType.TEXT_PLAIN)
+    public Response responseWithHeaders() {
+        return Response.ok("data")
+                .header("X-Custom-Response", "custom-value")
+                .header("X-Request-Id", "12345")
+                .build();
+    }
+
+    /**
+     * Test Response with no entity (204).
+     */
+    @DELETE
+    @Path("/response/nocontent")
+    public Response responseNoContent() {
+        return Response.noContent().build();
+    }
+
+    /**
+     * Test Response with error status.
+     */
+    @GET
+    @Path("/response/error")
+    @Produces(MediaType.TEXT_PLAIN)
+    public Response responseError() {
+        return Response.status(400).entity("Bad request data").build();
+    }
+
+    /**
+     * Simple data class for JSON response testing.
+     */
+    public record ResponseData(String name, int value) {}
 }

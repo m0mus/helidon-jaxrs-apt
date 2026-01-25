@@ -10,9 +10,9 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Minimal RuntimeDelegate implementation to support JAX-RS exceptions.
- * This is needed because JAX-RS exceptions like NotFoundException internally
- * use Response.status() which requires RuntimeDelegate.
+ * RuntimeDelegate implementation to support JAX-RS Response building.
+ * This is needed for methods that return jakarta.ws.rs.core.Response
+ * and for JAX-RS exceptions that internally use Response.status().
  */
 public class SimpleRuntimeDelegate extends RuntimeDelegate {
 
@@ -48,8 +48,19 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public <T> HeaderDelegate<T> createHeaderDelegate(Class<T> type) {
-        throw new UnsupportedOperationException("HeaderDelegate not supported");
+        if (type == MediaType.class) {
+            return (HeaderDelegate<T>) new MediaTypeHeaderDelegate();
+        }
+        if (type == Date.class) {
+            return (HeaderDelegate<T>) new DateHeaderDelegate();
+        }
+        if (type == CacheControl.class) {
+            return (HeaderDelegate<T>) new CacheControlHeaderDelegate();
+        }
+        // For other types, return a simple toString delegate
+        return (HeaderDelegate<T>) new ToStringHeaderDelegate();
     }
 
     @Override
@@ -79,17 +90,72 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
         throw new UnsupportedOperationException("SeBootstrap Configuration not supported");
     }
 
+    // ==================== Header Delegates ====================
+
+    private static class MediaTypeHeaderDelegate implements HeaderDelegate<MediaType> {
+        @Override
+        public MediaType fromString(String value) {
+            return value != null ? MediaType.valueOf(value) : null;
+        }
+
+        @Override
+        public String toString(MediaType value) {
+            return value != null ? value.toString() : null;
+        }
+    }
+
+    private static class DateHeaderDelegate implements HeaderDelegate<Date> {
+        @Override
+        public Date fromString(String value) {
+            // Simple implementation - real impl would parse HTTP date format
+            return null;
+        }
+
+        @Override
+        public String toString(Date value) {
+            return value != null ? value.toString() : null;
+        }
+    }
+
+    private static class CacheControlHeaderDelegate implements HeaderDelegate<CacheControl> {
+        @Override
+        public CacheControl fromString(String value) {
+            return null;
+        }
+
+        @Override
+        public String toString(CacheControl value) {
+            return value != null ? value.toString() : null;
+        }
+    }
+
+    private static class ToStringHeaderDelegate implements HeaderDelegate<Object> {
+        @Override
+        public Object fromString(String value) {
+            return value;
+        }
+
+        @Override
+        public String toString(Object value) {
+            return value != null ? value.toString() : null;
+        }
+    }
+
+    // ==================== Response Builder ====================
+
     /**
-     * Simple Response.ResponseBuilder that just tracks status.
+     * Response.ResponseBuilder that tracks status, entity, headers, and media type.
      */
     private static class SimpleResponseBuilder extends Response.ResponseBuilder {
         private int status = 200;
         private String reasonPhrase;
         private Object entity;
+        private MediaType mediaType;
+        private final MultivaluedMap<String, Object> headers = new MultivaluedHashMap<>();
 
         @Override
         public Response build() {
-            return new SimpleResponse(status, reasonPhrase, entity);
+            return new SimpleResponse(status, reasonPhrase, entity, mediaType, headers);
         }
 
         @Override
@@ -98,6 +164,8 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
             clone.status = this.status;
             clone.reasonPhrase = this.reasonPhrase;
             clone.entity = this.entity;
+            clone.mediaType = this.mediaType;
+            clone.headers.putAll(this.headers);
             return clone;
         }
 
@@ -148,11 +216,18 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
 
         @Override
         public Response.ResponseBuilder header(String name, Object value) {
+            if (value != null) {
+                headers.add(name, value);
+            }
             return this;
         }
 
         @Override
         public Response.ResponseBuilder replaceAll(MultivaluedMap<String, Object> headers) {
+            this.headers.clear();
+            if (headers != null) {
+                this.headers.putAll(headers);
+            }
             return this;
         }
 
@@ -168,11 +243,13 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
 
         @Override
         public Response.ResponseBuilder type(MediaType type) {
+            this.mediaType = type;
             return this;
         }
 
         @Override
         public Response.ResponseBuilder type(String type) {
+            this.mediaType = type != null ? MediaType.valueOf(type) : null;
             return this;
         }
 
@@ -242,18 +319,24 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
         }
     }
 
+    // ==================== Response Implementation ====================
+
     /**
-     * Simple Response implementation.
+     * Simple Response implementation with full header and media type support.
      */
     private static class SimpleResponse extends Response {
         private final int status;
         private final String reasonPhrase;
         private final Object entity;
+        private final MediaType mediaType;
+        private final MultivaluedMap<String, Object> headers;
 
-        SimpleResponse(int status, String reasonPhrase, Object entity) {
+        SimpleResponse(int status, String reasonPhrase, Object entity, MediaType mediaType, MultivaluedMap<String, Object> headers) {
             this.status = status;
             this.reasonPhrase = reasonPhrase;
             this.entity = entity;
+            this.mediaType = mediaType;
+            this.headers = headers != null ? headers : new MultivaluedHashMap<>();
         }
 
         @Override
@@ -322,7 +405,7 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
 
         @Override
         public MediaType getMediaType() {
-            return null;
+            return mediaType;
         }
 
         @Override
@@ -387,17 +470,30 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
 
         @Override
         public MultivaluedMap<String, Object> getMetadata() {
-            return new MultivaluedHashMap<>();
+            return headers;
         }
 
         @Override
         public MultivaluedMap<String, String> getStringHeaders() {
-            return new MultivaluedHashMap<>();
+            MultivaluedMap<String, String> result = new MultivaluedHashMap<>();
+            for (var entry : headers.entrySet()) {
+                for (var value : entry.getValue()) {
+                    result.add(entry.getKey(), value != null ? value.toString() : null);
+                }
+            }
+            return result;
         }
 
         @Override
         public String getHeaderString(String name) {
-            return null;
+            List<Object> values = headers.get(name);
+            if (values == null || values.isEmpty()) {
+                return null;
+            }
+            return values.stream()
+                    .map(v -> v != null ? v.toString() : "")
+                    .reduce((a, b) -> a + "," + b)
+                    .orElse(null);
         }
     }
 }
