@@ -249,6 +249,7 @@ public class JaxRsProcessor extends AbstractProcessor {
         Path classPath = resourceClass.getAnnotation(Path.class);
         String basePath = classPath != null ? normalizePath(classPath.value()) : "";
         String classProduces = getProduces(resourceClass);
+        String classConsumes = getConsumes(resourceClass);
 
         ClassModel.Builder classBuilder = ClassModel.builder()
                 .packageName(packageName)
@@ -265,7 +266,7 @@ public class JaxRsProcessor extends AbstractProcessor {
         addFields(classBuilder, resourceTypeName);
         addConstructor(classBuilder, resourceTypeName);
 
-        List<RouteInfo> routes = collectRoutes(resourceClass, basePath, classProduces);
+        List<RouteInfo> routes = collectRoutes(resourceClass, basePath, classProduces, classConsumes);
         addRegisterMethod(classBuilder, routes);
         addHandlerMethods(classBuilder, routes, resourceClass);
         addHelperMethods(classBuilder);
@@ -339,7 +340,7 @@ public class JaxRsProcessor extends AbstractProcessor {
         }
     }
 
-    private List<RouteInfo> collectRoutes(TypeElement resourceClass, String basePath, String classProduces) {
+    private List<RouteInfo> collectRoutes(TypeElement resourceClass, String basePath, String classProduces, String classConsumes) {
         List<RouteInfo> routes = new ArrayList<>();
 
         for (Element enclosed : resourceClass.getEnclosedElements()) {
@@ -358,7 +359,7 @@ public class JaxRsProcessor extends AbstractProcessor {
             String path = fullPath.isEmpty() ? "/" : fullPath;
             Set<String> methodBindings = getNameBindings(method, resourceClass);
 
-            routes.add(new RouteInfo(httpMethod, path, method, classProduces, methodBindings));
+            routes.add(new RouteInfo(httpMethod, path, method, classProduces, classConsumes, methodBindings));
         }
 
         // Sort: specific paths before parameterized, then by HTTP method for determinism
@@ -410,6 +411,49 @@ public class JaxRsProcessor extends AbstractProcessor {
                 .addContentLine("String msg = ctx.getAbortMessage();")
                 .addContentLine("res.status(ctx.getAbortStatus()).send(msg != null ? msg : \"\");")
                 .build());
+
+        // Helper method to check if Content-Type matches @Consumes
+        classBuilder.addMethod(Method.builder()
+                .name("matchesMediaType")
+                .accessModifier(AccessModifier.PRIVATE)
+                .returnType(TypeName.create("boolean"))
+                .addParameter(p -> p.name("contentType").type(TypeName.create("String")))
+                .addParameter(p -> p.name("allowed").type(TypeName.create("String[]")))
+                .addContentLine("if (contentType == null) return true;")
+                .addContentLine("String ct = contentType.toLowerCase();")
+                .addContentLine("int semi = ct.indexOf(';');")
+                .addContentLine("if (semi > 0) ct = ct.substring(0, semi).trim();")
+                .addContentLine("for (String a : allowed) {")
+                .addContentLine("    String al = a.toLowerCase().trim();")
+                .addContentLine("    if (al.equals(\"*/*\") || ct.equals(al)) return true;")
+                .addContentLine("    if (al.endsWith(\"/*\") && ct.startsWith(al.substring(0, al.length() - 1))) return true;")
+                .addContentLine("}")
+                .addContentLine("return false;")
+                .build());
+
+        // Helper method to check if Accept header matches @Produces
+        classBuilder.addMethod(Method.builder()
+                .name("acceptsMediaType")
+                .accessModifier(AccessModifier.PRIVATE)
+                .returnType(TypeName.create("boolean"))
+                .addParameter(p -> p.name("accept").type(TypeName.create("String")))
+                .addParameter(p -> p.name("produces").type(TypeName.create("String[]")))
+                .addContentLine("if (accept == null || accept.isEmpty() || accept.equals(\"*/*\")) return true;")
+                .addContentLine("String[] parts = accept.toLowerCase().split(\",\");")
+                .addContentLine("for (String part : parts) {")
+                .addContentLine("    String a = part.trim();")
+                .addContentLine("    int semi = a.indexOf(';');")
+                .addContentLine("    if (semi > 0) a = a.substring(0, semi).trim();")
+                .addContentLine("    if (a.equals(\"*/*\")) return true;")
+                .addContentLine("    for (String p : produces) {")
+                .addContentLine("        String pl = p.toLowerCase().trim();")
+                .addContentLine("        if (a.equals(pl)) return true;")
+                .addContentLine("        if (a.endsWith(\"/*\") && pl.startsWith(a.substring(0, a.length() - 1))) return true;")
+                .addContentLine("        if (pl.endsWith(\"/*\") && a.startsWith(pl.substring(0, pl.length() - 1))) return true;")
+                .addContentLine("    }")
+                .addContentLine("}")
+                .addContentLine("return false;")
+                .build());
     }
 
     private Method generateHandler(RouteInfo route, TypeElement resourceClass) {
@@ -438,6 +482,9 @@ public class JaxRsProcessor extends AbstractProcessor {
 
         // Post-matching request filters
         generateRequestFilters(handler);
+
+        // Content negotiation checks
+        generateContentNegotiation(handler, route);
 
         // Extract parameters
         List<String> paramNames = new ArrayList<>();
@@ -498,6 +545,59 @@ public class JaxRsProcessor extends AbstractProcessor {
         handler.addContentLine("}");
     }
 
+    private void generateContentNegotiation(Method.Builder handler, RouteInfo route) {
+        ExecutableElement method = route.method;
+
+        // Get @Consumes - method level overrides class level
+        String[] methodConsumes = getAllConsumes(method);
+        String[] consumes = methodConsumes.length > 0 ? methodConsumes : getAllConsumes(method.getEnclosingElement());
+
+        // Get @Produces - method level overrides class level
+        String[] methodProduces = getAllProduces(method);
+        String[] produces = methodProduces.length > 0 ? methodProduces : getAllProduces(method.getEnclosingElement());
+
+        // Check @Consumes - only for methods that might have a body (POST, PUT, PATCH)
+        if (consumes.length > 0 && isBodyMethod(route.httpMethod)) {
+            handler.addContentLine("// Content-Type validation");
+            handler.addContent("String _contentType = req.headers().contentType().map(")
+                    .addContentLine("ct -> ct.mediaType().text()).orElse(null);");
+            handler.addContent("if (_contentType != null && !matchesMediaType(_contentType, ")
+                    .addContent(formatMediaTypeArray(consumes)).addContentLine(")) {");
+            handler.increaseContentPadding();
+            handler.addContentLine("res.status(415).send(\"Unsupported Media Type\");");
+            handler.addContentLine("return;");
+            handler.decreaseContentPadding();
+            handler.addContentLine("}");
+        }
+
+        // Check Accept header against @Produces
+        if (produces.length > 0) {
+            handler.addContentLine("// Accept header validation");
+            handler.addContentLine("String _accept = req.headers().first(io.helidon.http.HeaderNames.ACCEPT).orElse(\"*/*\");");
+            handler.addContent("if (!acceptsMediaType(_accept, ")
+                    .addContent(formatMediaTypeArray(produces)).addContentLine(")) {");
+            handler.increaseContentPadding();
+            handler.addContentLine("res.status(406).send(\"Not Acceptable\");");
+            handler.addContentLine("return;");
+            handler.decreaseContentPadding();
+            handler.addContentLine("}");
+        }
+    }
+
+    private boolean isBodyMethod(String httpMethod) {
+        return "POST".equals(httpMethod) || "PUT".equals(httpMethod) || "PATCH".equals(httpMethod);
+    }
+
+    private String formatMediaTypeArray(String[] mediaTypes) {
+        StringBuilder sb = new StringBuilder("new String[]{");
+        for (int i = 0; i < mediaTypes.length; i++) {
+            if (i > 0) sb.append(", ");
+            sb.append("\"").append(escapeJavaString(mediaTypes[i])).append("\"");
+        }
+        sb.append("}");
+        return sb.toString();
+    }
+
     private BodyParamInfo extractParameters(ExecutableElement method, Method.Builder handler, List<String> paramNames) {
         BodyParamInfo bodyParam = null;
 
@@ -530,21 +630,28 @@ public class JaxRsProcessor extends AbstractProcessor {
     private void generateBodyReading(Method.Builder handler, BodyParamInfo bodyParam, List<String> paramNames) {
         TypeName bodyType = TypeName.create(bodyParam.type);
 
-        handler.addContent(READER_CONTEXT).addContent(" readerCtx = new ").addContent(READER_CONTEXT)
-                .addContent("(req, objectMapper, ").addContent(bodyType).addContentLine(".class);");
+        // For String body parameters, read raw content directly
+        if ("java.lang.String".equals(bodyParam.type)) {
+            handler.addContent("String ").addContent(bodyParam.name)
+                    .addContentLine(" = req.content().as(String.class);");
+        } else {
+            // For other types, use Jackson via reader interceptors
+            handler.addContent(READER_CONTEXT).addContent(" readerCtx = new ").addContent(READER_CONTEXT)
+                    .addContent("(req, objectMapper, ").addContent(bodyType).addContentLine(".class);");
 
-        handler.addContentLine("for (var entry : filterContext.getReaderInterceptorsWithBindings()) {");
-        handler.increaseContentPadding();
-        handler.addContentLine("if (entry.matches(methodBindings)) {");
-        handler.increaseContentPadding();
-        handler.addContentLine("entry.interceptor().aroundReadFrom(readerCtx);");
-        handler.decreaseContentPadding();
-        handler.addContentLine("}");
-        handler.decreaseContentPadding();
-        handler.addContentLine("}");
+            handler.addContentLine("for (var entry : filterContext.getReaderInterceptorsWithBindings()) {");
+            handler.increaseContentPadding();
+            handler.addContentLine("if (entry.matches(methodBindings)) {");
+            handler.increaseContentPadding();
+            handler.addContentLine("entry.interceptor().aroundReadFrom(readerCtx);");
+            handler.decreaseContentPadding();
+            handler.addContentLine("}");
+            handler.decreaseContentPadding();
+            handler.addContentLine("}");
 
-        handler.addContent(bodyType).addContent(" ").addContent(bodyParam.name)
-                .addContent(" = (").addContent(bodyType).addContentLine(") readerCtx.proceed();");
+            handler.addContent(bodyType).addContent(" ").addContent(bodyParam.name)
+                    .addContent(" = (").addContent(bodyType).addContentLine(") readerCtx.proceed();");
+        }
 
         paramNames.add(bodyParam.name);
     }
@@ -577,8 +684,13 @@ public class JaxRsProcessor extends AbstractProcessor {
             generateWriterInterceptors(handler, contentType);
             generateResponseFilters(handler);
 
-            // Send the response after all filters/interceptors
-            handler.addContentLine("res.status(responseContext.getStatus()).header(\"Content-Type\", \"" + contentType + "\").send(_output);");
+            // For text/plain with String return, use the raw result (not JSON-serialized)
+            if (contentType.startsWith("text/") && "java.lang.String".equals(returnType.toString())) {
+                handler.addContentLine("res.status(responseContext.getStatus()).header(\"Content-Type\", \"" + contentType + "\").send(result);");
+            } else {
+                // Send the JSON-serialized response
+                handler.addContentLine("res.status(responseContext.getStatus()).header(\"Content-Type\", \"" + contentType + "\").send(_output);");
+            }
         }
     }
 
@@ -827,7 +939,15 @@ public class JaxRsProcessor extends AbstractProcessor {
                 && param.getAnnotation(FormParam.class) == null
                 && param.getAnnotation(Context.class) == null
                 && param.getAnnotation(BeanParam.class) == null
-                && !isPrimitive(param.asType().toString());
+                && !isPrimitiveNumber(param.asType().toString());
+    }
+
+    private boolean isPrimitiveNumber(String type) {
+        // Numeric primitives/wrappers without annotations can't be body params
+        // String without annotation IS a body param (raw request body)
+        return Set.of("int", "long", "double", "boolean",
+                "java.lang.Integer", "java.lang.Long",
+                "java.lang.Double", "java.lang.Boolean").contains(type);
     }
 
     private String extractParameter(VariableElement param, Method.Builder handler) {
@@ -1334,6 +1454,21 @@ public class JaxRsProcessor extends AbstractProcessor {
         return produces != null && produces.value().length > 0 ? produces.value()[0] : null;
     }
 
+    private String[] getAllProduces(Element element) {
+        Produces produces = element.getAnnotation(Produces.class);
+        return produces != null ? produces.value() : new String[0];
+    }
+
+    private String getConsumes(Element element) {
+        Consumes consumes = element.getAnnotation(Consumes.class);
+        return consumes != null && consumes.value().length > 0 ? consumes.value()[0] : null;
+    }
+
+    private String[] getAllConsumes(Element element) {
+        Consumes consumes = element.getAnnotation(Consumes.class);
+        return consumes != null ? consumes.value() : new String[0];
+    }
+
     private String normalizePath(String path) {
         if (!path.startsWith("/")) path = "/" + path;
         if (path.endsWith("/") && path.length() > 1) path = path.substring(0, path.length() - 1);
@@ -1362,7 +1497,7 @@ public class JaxRsProcessor extends AbstractProcessor {
 
     // Internal data classes
     private record FilterInfo(TypeElement typeElement, int priority, Set<String> nameBindings) {}
-    private record RouteInfo(String httpMethod, String path, ExecutableElement method, String classProduces, Set<String> nameBindings) {
+    private record RouteInfo(String httpMethod, String path, ExecutableElement method, String classProduces, String classConsumes, Set<String> nameBindings) {
         String handlerName() {
             return method.getSimpleName() + "_handler";
         }
