@@ -851,7 +851,7 @@ public class JaxRsProcessor extends AbstractProcessor {
 
         HeaderParam headerParam = param.getAnnotation(HeaderParam.class);
         if (headerParam != null) {
-            generateHeaderParam(handler, typeName, varName, headerParam.value(), defaultVal);
+            generateHeaderParam(handler, typeName, varName, headerParam.value(), type, defaultVal);
             return varName;
         }
 
@@ -1029,6 +1029,12 @@ public class JaxRsProcessor extends AbstractProcessor {
     }
 
     private void generateQueryParam(Method.Builder handler, TypeName typeName, String varName, String paramName, String type, String defaultVal) {
+        // Handle List/Set types
+        if (isCollectionType(type)) {
+            generateCollectionQueryParam(handler, typeName, varName, paramName, type);
+            return;
+        }
+
         String defaultExpr = defaultVal != null ? "\"" + escapeJavaString(defaultVal) + "\"" : "null";
 
         handler.addContent("String _").addContent(varName).addContent(" = req.query().first(\"")
@@ -1045,12 +1051,90 @@ public class JaxRsProcessor extends AbstractProcessor {
         }
     }
 
-    private void generateHeaderParam(Method.Builder handler, TypeName typeName, String varName, String paramName, String defaultVal) {
+    private void generateCollectionQueryParam(Method.Builder handler, TypeName typeName, String varName, String paramName, String type) {
+        String elementType = getCollectionElementType(type);
+        boolean isSet = isSetType(type);
+
+        // Get all values for this query parameter (use default empty list if not present)
+        handler.addContent("java.util.List<String> _").addContent(varName).addContent("_raw = req.query().all(\"")
+                .addContent(escapeJavaString(paramName)).addContentLine("\", java.util.List::of);");
+
+        if (needsConversion(elementType)) {
+            // Convert each element
+            String conversionMethod = getStreamConversionMethod(elementType);
+            if (isSet) {
+                handler.addContent(typeName).addContent(" ").addContent(varName)
+                        .addContent(" = _").addContent(varName).addContent("_raw.stream().map(")
+                        .addContent(conversionMethod).addContentLine(").collect(java.util.stream.Collectors.toSet());");
+            } else {
+                handler.addContent(typeName).addContent(" ").addContent(varName)
+                        .addContent(" = _").addContent(varName).addContent("_raw.stream().map(")
+                        .addContent(conversionMethod).addContentLine(").collect(java.util.stream.Collectors.toList());");
+            }
+        } else {
+            // String elements - no conversion needed
+            if (isSet) {
+                handler.addContent(typeName).addContent(" ").addContent(varName)
+                        .addContent(" = new java.util.HashSet<>(_").addContent(varName).addContentLine("_raw);");
+            } else {
+                handler.addContent(typeName).addContent(" ").addContent(varName)
+                        .addContent(" = new java.util.ArrayList<>(_").addContent(varName).addContentLine("_raw);");
+            }
+        }
+    }
+
+    private String getStreamConversionMethod(String elementType) {
+        return switch (elementType) {
+            case "java.lang.Long", "Long" -> "Long::parseLong";
+            case "java.lang.Integer", "Integer" -> "Integer::parseInt";
+            case "java.lang.Double", "Double" -> "Double::parseDouble";
+            case "java.lang.Boolean", "Boolean" -> "Boolean::parseBoolean";
+            default -> "s -> s";
+        };
+    }
+
+    private void generateHeaderParam(Method.Builder handler, TypeName typeName, String varName, String paramName, String type, String defaultVal) {
+        // Handle List/Set types
+        if (isCollectionType(type)) {
+            generateCollectionHeaderParam(handler, typeName, varName, paramName, type);
+            return;
+        }
+
         String defaultExpr = defaultVal != null ? "\"" + escapeJavaString(defaultVal) + "\"" : "null";
 
         handler.addContent(typeName).addContent(" ").addContent(varName)
                 .addContent(" = req.headers().first(io.helidon.http.HeaderNames.create(\"").addContent(escapeJavaString(paramName))
                 .addContent("\")).map(Object::toString).orElse(").addContent(defaultExpr).addContentLine(");");
+    }
+
+    private void generateCollectionHeaderParam(Method.Builder handler, TypeName typeName, String varName, String paramName, String type) {
+        String elementType = getCollectionElementType(type);
+        boolean isSet = isSetType(type);
+
+        // Get all values for this header
+        handler.addContent("java.util.List<String> _").addContent(varName).addContent("_raw = req.headers().all(io.helidon.http.HeaderNames.create(\"")
+                .addContent(escapeJavaString(paramName)).addContentLine("\"), java.util.List::of);");
+
+        if (needsConversion(elementType)) {
+            String conversionMethod = getStreamConversionMethod(elementType);
+            if (isSet) {
+                handler.addContent(typeName).addContent(" ").addContent(varName)
+                        .addContent(" = _").addContent(varName).addContent("_raw.stream().map(")
+                        .addContent(conversionMethod).addContentLine(").collect(java.util.stream.Collectors.toSet());");
+            } else {
+                handler.addContent(typeName).addContent(" ").addContent(varName)
+                        .addContent(" = _").addContent(varName).addContent("_raw.stream().map(")
+                        .addContent(conversionMethod).addContentLine(").collect(java.util.stream.Collectors.toList());");
+            }
+        } else {
+            if (isSet) {
+                handler.addContent(typeName).addContent(" ").addContent(varName)
+                        .addContent(" = new java.util.HashSet<>(_").addContent(varName).addContentLine("_raw);");
+            } else {
+                handler.addContent(typeName).addContent(" ").addContent(varName)
+                        .addContent(" = new java.util.ArrayList<>(_").addContent(varName).addContentLine("_raw);");
+            }
+        }
     }
 
     private void generateCookieParam(Method.Builder handler, TypeName typeName, String varName, String paramName, String defaultVal) {
@@ -1115,6 +1199,27 @@ public class JaxRsProcessor extends AbstractProcessor {
         return Set.of("int", "long", "double", "boolean",
                 "java.lang.String", "java.lang.Integer", "java.lang.Long",
                 "java.lang.Double", "java.lang.Boolean").contains(type);
+    }
+
+    private boolean isListType(String type) {
+        return type.startsWith("java.util.List<") || type.equals("java.util.List");
+    }
+
+    private boolean isSetType(String type) {
+        return type.startsWith("java.util.Set<") || type.equals("java.util.Set");
+    }
+
+    private boolean isCollectionType(String type) {
+        return isListType(type) || isSetType(type);
+    }
+
+    private String getCollectionElementType(String type) {
+        int start = type.indexOf('<');
+        int end = type.lastIndexOf('>');
+        if (start > 0 && end > start) {
+            return type.substring(start + 1, end);
+        }
+        return "java.lang.String"; // Default to String if no generic type
     }
 
     private boolean hasFormParamInBean(VariableElement param) {
