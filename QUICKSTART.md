@@ -8,6 +8,8 @@ mvn clean compile
 
 Watch for annotation processor output:
 ```
+[INFO] Found request filter: io.helidon.examples.jaxrs.apt.filter.LoggingFilter (priority=1000)
+[INFO] Found response filter: io.helidon.examples.jaxrs.apt.filter.LoggingFilter (priority=1000)
 [INFO] Generating routing for: io.helidon.examples.jaxrs.apt.UserResource
 [INFO] Generated: io.helidon.examples.jaxrs.apt.UserResource$$JaxRsRouting
 ```
@@ -35,7 +37,7 @@ Output:
 Server started at http://localhost:8080
 ```
 
-## 5. Test
+## 5. Test the API
 
 ```bash
 # List all users
@@ -64,6 +66,22 @@ curl "http://localhost:8080/users?name=Alice"
 curl http://localhost:8080/users/count
 ```
 
+## 6. Run Tests
+
+```bash
+# Run all tests (94 tests)
+mvn test
+
+# Run only integration tests
+mvn test -Pintegration-tests
+
+# Run specific test class
+mvn test -Dtest=ParameterExtractionTest
+
+# Run with verbose output
+mvn test -X
+```
+
 ## Adding New Resources
 
 1. Create a JAX-RS resource class:
@@ -78,9 +96,23 @@ public class ProductResource {
         return productService.findAll();
     }
 
+    @GET
+    @Path("/{id}")
+    public Product getProduct(@PathParam("id") Long id) {
+        return productService.findById(id);
+    }
+
     @POST
-    public Product createProduct(Product product) {
-        return productService.save(product);
+    public Response createProduct(Product product) {
+        Product saved = productService.save(product);
+        return Response.status(201).entity(saved).build();
+    }
+
+    @GET
+    @Path("/search")
+    public List<Product> search(@QueryParam("tag") List<String> tags,
+                                @BeanParam SearchParams params) {
+        // Supports List parameters and @BeanParam
     }
 }
 ```
@@ -97,6 +129,70 @@ mvn compile
 new UserResource$$JaxRsRouting().register(routing);
 new ProductResource$$JaxRsRouting().register(routing);
 ```
+
+## Adding Custom Exception Mapper
+
+1. Create the exception:
+
+```java
+public class ProductNotFoundException extends RuntimeException {
+    private final Long productId;
+
+    public ProductNotFoundException(Long productId) {
+        super("Product not found: " + productId);
+        this.productId = productId;
+    }
+
+    public Long getProductId() { return productId; }
+}
+```
+
+2. Create the mapper:
+
+```java
+@Provider
+public class ProductNotFoundMapper implements ExceptionMapper<ProductNotFoundException> {
+    @Override
+    public Response toResponse(ProductNotFoundException e) {
+        return Response.status(404)
+                .entity(Map.of("error", e.getMessage(), "productId", e.getProductId()))
+                .build();
+    }
+}
+```
+
+3. Throw from resource (mapper is auto-detected):
+
+```java
+@GET
+@Path("/{id}")
+public Product getProduct(@PathParam("id") Long id) {
+    return productService.findById(id)
+            .orElseThrow(() -> new ProductNotFoundException(id));
+}
+```
+
+## Adding Filters
+
+1. Create a filter with `@Provider`:
+
+```java
+@Provider
+@Priority(100)  // Lower = executes first for requests
+public class AuthFilter implements ContainerRequestFilter {
+    @Override
+    public void filter(ContainerRequestContext ctx) {
+        String auth = ctx.getHeaderString("Authorization");
+        if (auth == null || !isValid(auth)) {
+            ctx.abortWith(Response.status(401)
+                    .entity("Unauthorized")
+                    .build());
+        }
+    }
+}
+```
+
+2. Compile and run - the filter is auto-detected and applied to all routes.
 
 ## Troubleshooting
 
@@ -115,3 +211,17 @@ Should contain:
 ```
 io.helidon.examples.jaxrs.apt.processor.JaxRsProcessor
 ```
+
+### Filter Not Being Applied
+
+Ensure the filter class has:
+- `@Provider` annotation
+- Implements `ContainerRequestFilter` or `ContainerResponseFilter`
+- Is in a package that's compiled during the processor phase
+
+### ExceptionMapper Not Working
+
+Ensure:
+- `@Provider` annotation is present
+- Class implements `ExceptionMapper<YourException>`
+- `SimpleRuntimeDelegate.init()` is called (happens automatically in generated code)

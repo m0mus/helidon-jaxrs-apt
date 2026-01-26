@@ -3,42 +3,51 @@
 ## Annotation Processing Lifecycle
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│ 1. COMPILATION STARTS                                      │
-│    javac UserResource.java                                 │
-└────────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌────────────────────────────────────────────────────────────┐
-│ 2. JAVAC DISCOVERS ANNOTATION PROCESSORS                   │
-│    - Reads META-INF/services/javax.annotation.processing   │
-│    - Loads JaxRsProcessor                                  │
-└────────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌────────────────────────────────────────────────────────────┐
-│ 3. PROCESSOR ROUND 1: PROCESS ANNOTATIONS                  │
-│    JaxRsProcessor.process() called                         │
-│    - Finds @Path classes                                   │
-│    - Finds @Provider filter classes                        │
-│    - Analyzes methods, parameters, return types            │
-└────────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌────────────────────────────────────────────────────────────┐
-│ 4. CODE GENERATION                                         │
-│    JaxRsProcessor.processResourceClass()                   │
-│    - Uses Helidon ClassModel for code generation           │
-│    - Generates handler methods with filter support         │
-│    - Writes to Filer                                       │
-│    → UserResource$$JaxRsRouting.java                       │
-└────────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌────────────────────────────────────────────────────────────┐
-│ 5. COMPILE GENERATED CODE                                  │
-│    javac UserResource$$JaxRsRouting.java                   │
-└────────────────────────────────────────────────────────────┘
++------------------------------------------------------------+
+| 1. COMPILATION STARTS                                      |
+|    javac UserResource.java                                 |
++------------------------------------------------------------+
+                         |
+                         v
++------------------------------------------------------------+
+| 2. JAVAC DISCOVERS ANNOTATION PROCESSORS                   |
+|    - Reads META-INF/services/javax.annotation.processing   |
+|    - Loads JaxRsProcessor                                  |
++------------------------------------------------------------+
+                         |
+                         v
++------------------------------------------------------------+
+| 3. PROCESSOR ROUND 1: COLLECT PROVIDERS                    |
+|    JaxRsProcessor.process() called                         |
+|    - Finds @Provider filter classes                        |
+|    - Finds @Provider interceptor classes                   |
+|    - Finds @Provider ExceptionMapper classes               |
+|    - Detects @Priority, @PreMatching, @NameBinding         |
++------------------------------------------------------------+
+                         |
+                         v
++------------------------------------------------------------+
+| 4. PROCESSOR ROUND 2: PROCESS RESOURCES                    |
+|    - Finds @Path resource classes                          |
+|    - Analyzes methods, parameters, return types            |
+|    - Detects @NameBinding on methods/classes               |
++------------------------------------------------------------+
+                         |
+                         v
++------------------------------------------------------------+
+| 5. CODE GENERATION                                         |
+|    JaxRsProcessor.processResourceClass()                   |
+|    - Uses Helidon ClassModel for code generation           |
+|    - Generates handler methods with filter support         |
+|    - Writes to Filer                                       |
+|    -> UserResource$$JaxRsRouting.java                      |
++------------------------------------------------------------+
+                         |
+                         v
++------------------------------------------------------------+
+| 6. COMPILE GENERATED CODE                                  |
+|    javac UserResource$$JaxRsRouting.java                   |
++------------------------------------------------------------+
 ```
 
 ## Code Generation with Helidon ClassModel
@@ -63,12 +72,12 @@ classBuilder.addField(Field.builder()
         .isFinal(true)
         .build());
 
-// Add constructor using consumer pattern
-classBuilder.addConstructor(ctor -> ctor
-        .accessModifier(AccessModifier.PUBLIC)
-        .addContent("this.resource = new ")
-        .addContent(resourceTypeName)
-        .addContentLine("();"));
+classBuilder.addField(Field.builder()
+        .name("filterContext")
+        .type(TypeName.create("io.helidon.examples.jaxrs.apt.runtime.FilterContext"))
+        .accessModifier(AccessModifier.PRIVATE)
+        .isFinal(true)
+        .build());
 ```
 
 ### TypeName for Automatic Imports
@@ -83,14 +92,56 @@ handler.addContent(SERVER_REQUEST)  // Adds import automatically
        .addContent(" req");
 ```
 
-### Generic Types
+## Provider Collection
 
-Building generic types like `List<ContainerRequestFilter>`:
+The processor collects all `@Provider` annotated classes:
+
+### Filters
 
 ```java
-TypeName listOfFilters = TypeName.builder(LIST)
-        .addTypeArgument(requestFilterType)
-        .build();
+// Request filters (sorted by @Priority, lower = first)
+private List<FilterInfo> requestFilters = new ArrayList<>();
+
+// Response filters (sorted by @Priority reversed, lower = last)
+private List<FilterInfo> responseFilters = new ArrayList<>();
+
+// Pre-matching filters (execute before route matching)
+private List<FilterInfo> preMatchingRequestFilters = new ArrayList<>();
+```
+
+### Interceptors
+
+```java
+// Reader interceptors (for request body processing)
+private List<FilterInfo> readerInterceptors = new ArrayList<>();
+
+// Writer interceptors (for response body processing)
+private List<FilterInfo> writerInterceptors = new ArrayList<>();
+```
+
+### Exception Mappers
+
+```java
+// Maps exception types to their mappers
+private List<ExceptionMapperInfo> exceptionMappers = new ArrayList<>();
+
+private record ExceptionMapperInfo(TypeElement typeElement, String exceptionType, int priority) {}
+```
+
+Detection of exception type from generic parameter:
+
+```java
+private String getExceptionMapperType(TypeElement typeElement) {
+    for (TypeMirror iface : typeElement.getInterfaces()) {
+        String ifaceStr = iface.toString();
+        if (ifaceStr.startsWith("jakarta.ws.rs.ext.ExceptionMapper<")) {
+            int start = ifaceStr.indexOf('<') + 1;
+            int end = ifaceStr.lastIndexOf('>');
+            return ifaceStr.substring(start, end);
+        }
+    }
+    return null;
+}
 ```
 
 ## Handler Generation
@@ -98,44 +149,33 @@ TypeName listOfFilters = TypeName.builder(LIST)
 For each JAX-RS method, the processor generates a handler:
 
 ```java
-private Method generateHandler(RouteInfo route, String resourceClassName) {
+private void generateHandler(RouteInfo route, ClassModel.Builder classBuilder) {
     Method.Builder handler = Method.builder()
             .name(route.handlerName())
             .accessModifier(AccessModifier.PRIVATE)
             .addParameter(p -> p.name("req").type(SERVER_REQUEST))
             .addParameter(p -> p.name("res").type(SERVER_RESPONSE));
 
-    handler.addContentLine("try {");
-    handler.increaseContentPadding();
+    // 1. Pre-matching filters
+    generatePreMatchingFilters(handler);
 
-    // Generate request filter execution
-    handler.addContent(requestContext)
-           .addContent(" requestContext = new ")
-           .addContent(requestContext)
-           .addContentLine("(req);");
-    handler.addContentLine("for (var filter : requestFilters) {");
-    handler.increaseContentPadding();
-    handler.addContentLine("filter.filter(requestContext);");
-    handler.addContentLine("if (requestContext.isAborted()) {");
-    // ... abort handling
-    handler.decreaseContentPadding();
-    handler.addContentLine("}");
+    // 2. Request filters (with name binding support)
+    generateRequestFilters(handler, route.nameBindings());
 
-    // Generate parameter extraction
-    for (VariableElement param : method.getParameters()) {
-        extractParameter(param, handler);
-    }
+    // 3. Parameter extraction
+    List<String> paramNames = extractParameters(route.method(), handler);
 
-    // Generate method invocation
-    handler.addContent("resource.")
-           .addContent(methodName)
-           .addContent("(")
-           .addContent(args)
-           .addContentLine(");");
+    // 4. Method invocation with reader interceptors
+    generateMethodInvocation(handler, route, paramNames);
 
-    // ... response handling and exception catching
+    // 5. Response filters
+    generateResponseFilters(handler);
 
-    return handler.build();
+    // 6. Writer interceptors and response sending
+    generateResponseSending(handler);
+
+    // 7. Exception handling with ExceptionMapper support
+    generateExceptionHandling(handler);
 }
 ```
 
@@ -143,76 +183,183 @@ private Method generateHandler(RouteInfo route, String resourceClassName) {
 
 The processor analyzes parameter annotations and generates extraction code:
 
+### Basic Parameters
+
 ```java
-private String extractParameter(VariableElement param, Method.Builder handler) {
-    // @PathParam
-    PathParam pathParam = param.getAnnotation(PathParam.class);
-    if (pathParam != null) {
-        handler.addContent(typeName)
-               .addContent(" ")
-               .addContent(varName)
-               .addContent(" = ");
-        handler.addContent(convertType(
-            "req.path().pathParameters().get(\"" + pathParam.value() + "\")",
-            type));
-        handler.addContentLine(";");
-        return varName;
-    }
+// @PathParam
+handler.addContent("String _id = req.path().pathParameters().get(\"id\");");
+handler.addContent("Long id = _id != null ? Long.parseLong(_id) : null;");
 
-    // @QueryParam with @DefaultValue support
-    QueryParam queryParam = param.getAnnotation(QueryParam.class);
-    DefaultValue defaultValue = param.getAnnotation(DefaultValue.class);
-    if (queryParam != null) {
-        String orElse = defaultValue != null
-            ? "\"" + defaultValue.value() + "\""
-            : "null";
-        handler.addContent(convertType(
-            "req.query().first(\"" + queryParam.value() + "\").orElse(" + orElse + ")",
-            type));
-        // ...
-    }
+// @QueryParam with @DefaultValue
+handler.addContent("String _name = req.query().first(\"name\").orElse(\"default\");");
 
-    // @CookieParam
-    // @FormParam
-    // @HeaderParam
-    // @Context (UriInfo, HttpHeaders)
-    // Body parameter (JSON deserialization)
+// @HeaderParam
+handler.addContent("String auth = req.headers().first(HeaderNames.create(\"Authorization\")).orElse(null);");
+
+// @CookieParam
+handler.addContent("String session = req.headers().cookies().first(\"session\").orElse(null);");
+
+// @FormParam (requires caching form data)
+handler.addContent("String field = _formParams.first(\"field\").orElse(null);");
+```
+
+### Collection Parameters (List/Set)
+
+```java
+// List<String> @QueryParam
+handler.addContent("List<String> _tags_raw = req.query().all(\"tag\", List::of);");
+handler.addContent("List<String> tags = new ArrayList<>(_tags_raw);");
+
+// List<Long> with conversion
+handler.addContent("List<String> _ids_raw = req.query().all(\"id\", List::of);");
+handler.addContent("List<Long> ids = _ids_raw.stream().map(Long::parseLong).collect(Collectors.toList());");
+
+// Set<String> (removes duplicates)
+handler.addContent("List<String> _tags_raw = req.query().all(\"tag\", List::of);");
+handler.addContent("Set<String> tags = new HashSet<>(_tags_raw);");
+```
+
+### @BeanParam
+
+```java
+// Create bean instance
+handler.addContent("SearchParams params = new SearchParams();");
+
+// Extract fields from bean class annotations
+handler.addContent("String _q = req.query().first(\"q\").orElse(null);");
+handler.addContent("params.setQuery(_q);");
+
+handler.addContent("String _page = req.query().first(\"page\").orElse(\"1\");");
+handler.addContent("if (_page != null) { params.setPage(Integer.parseInt(_page)); }");
+```
+
+### @Context
+
+```java
+// UriInfo
+handler.addContent("UriInfo uriInfo = new HelidonUriInfo(req);");
+
+// HttpHeaders
+handler.addContent("HttpHeaders headers = new HelidonHttpHeaders(req);");
+```
+
+## Response Handling
+
+### POJO Return Types
+
+```java
+Object result = resource.getUsers();
+HelidonContainerResponseContext responseContext = new HelidonContainerResponseContext(200, result);
+// Run response filters...
+String json = objectMapper.writeValueAsString(responseContext.getEntity());
+res.status(200).header("Content-Type", "application/json").send(json);
+```
+
+### jakarta.ws.rs.core.Response Return Type
+
+```java
+Response jaxrsResponse = resource.createUser(user);
+int status = jaxrsResponse.getStatus();
+Object entity = jaxrsResponse.getEntity();
+
+// Copy headers from Response
+for (var hdr : jaxrsResponse.getStringHeaders().entrySet()) {
+    for (var val : hdr.getValue()) {
+        res.header(HeaderNames.create(hdr.getKey()), val);
+    }
+}
+
+// Send based on content type
+if (entity instanceof String) {
+    res.status(status).send((String) entity);
+} else if (entity != null) {
+    res.status(status).send(objectMapper.writeValueAsString(entity));
+} else {
+    res.status(status).send();
 }
 ```
 
-## Filter Integration
+## Exception Handling
 
-Filters annotated with `@Provider` are detected and integrated:
+The processor generates a comprehensive exception handling chain:
 
 ```java
-@Override
-public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
-    // Collect filter classes
-    for (Element element : roundEnv.getElementsAnnotatedWith(Provider.class)) {
-        if (element.getKind() == ElementKind.CLASS) {
-            TypeElement typeElement = (TypeElement) element;
-            if (implementsInterface(typeElement, "jakarta.ws.rs.container.ContainerRequestFilter")) {
-                requestFilters.add(typeElement);
-            }
-            if (implementsInterface(typeElement, "jakarta.ws.rs.container.ContainerResponseFilter")) {
-                responseFilters.add(typeElement);
-            }
+} catch (Throwable _ex) {
+    // 1. Check for custom ExceptionMapper
+    ExceptionMapper<Throwable> mapper = filterContext.findExceptionMapper(_ex);
+    if (mapper != null) {
+        Response response = mapper.toResponse(_ex);
+        // Send mapped response...
+        return;
+    }
+
+    // 2. Handle standard JAX-RS exceptions
+    if (_ex instanceof NotFoundException) {
+        res.status(404).send(_ex.getMessage());
+    } else if (_ex instanceof BadRequestException) {
+        res.status(400).send(_ex.getMessage());
+    } else if (_ex instanceof NotAuthorizedException) {
+        res.status(401).send(_ex.getMessage());
+    }
+    // ... other JAX-RS exceptions
+
+    // 3. Default 500 for unknown exceptions
+    } else {
+        res.status(500).send("Internal Server Error: " + _ex.getMessage());
+    }
+}
+```
+
+## Filter Context
+
+The `FilterContext` class manages all providers:
+
+```java
+public class FilterContext {
+    private final List<ContainerRequestFilter> preMatchingRequestFilters;
+    private final List<FilterEntry<ContainerRequestFilter>> requestFilters;
+    private final List<FilterEntry<ContainerResponseFilter>> responseFilters;
+    private final List<InterceptorEntry<ReaderInterceptor>> readerInterceptors;
+    private final List<InterceptorEntry<WriterInterceptor>> writerInterceptors;
+    private final List<ExceptionMapperEntry<?>> exceptionMappers;
+
+    // Name binding support
+    public record FilterEntry<T>(T filter, Set<String> nameBindings) {
+        public boolean matches(Set<String> methodBindings) {
+            if (nameBindings.isEmpty()) return true;  // Global filter
+            return nameBindings.stream().anyMatch(methodBindings::contains);
         }
     }
-    // ...
+
+    // Exception mapper lookup with inheritance
+    public <T extends Throwable> ExceptionMapper<T> findExceptionMapper(T exception) {
+        // First try exact match, then walk up inheritance chain
+        // Returns most specific mapper
+    }
 }
 ```
 
-Generated constructor initializes filters:
+## SimpleRuntimeDelegate
+
+Required for `Response.status()`, `Response.ok()` etc. to work:
 
 ```java
-public UserResource$$JaxRsRouting() {
-    this.resource = new UserResource();
-    this.objectMapper = new ObjectMapper();
-    this.requestFilters = new ArrayList<>();
-    this.requestFilters.add(new LoggingFilter());
-    this.responseFilters = new ArrayList<>();
-    this.responseFilters.add(new LoggingFilter());
+public class SimpleRuntimeDelegate extends RuntimeDelegate {
+    static {
+        RuntimeDelegate.setInstance(new SimpleRuntimeDelegate());
+    }
+
+    @Override
+    public Response.ResponseBuilder createResponseBuilder() {
+        return new SimpleResponseBuilder();
+    }
+
+    // Header delegates for MediaType, Date, CacheControl
+    @Override
+    public <T> HeaderDelegate<T> createHeaderDelegate(Class<T> type) {
+        if (type == MediaType.class) return new MediaTypeHeaderDelegate();
+        // ...
+    }
 }
 ```
 
@@ -231,60 +378,6 @@ routes.sort((a, b) -> {
 ```
 
 This ensures `/users/count` is registered before `/users/{id}`.
-
-## Runtime Wrappers
-
-The runtime package provides JAX-RS interface implementations wrapping Helidon types:
-
-### HelidonUriInfo
-
-Wraps `ServerRequest` to implement `jakarta.ws.rs.core.UriInfo`:
-
-```java
-public class HelidonUriInfo implements UriInfo {
-    private final ServerRequest request;
-
-    @Override
-    public String getPath() {
-        return request.path().path();
-    }
-
-    @Override
-    public MultivaluedMap<String, String> getQueryParameters() {
-        MultivaluedMap<String, String> params = new MultivaluedHashMap<>();
-        request.query().toMap().forEach((key, values) -> {
-            for (String value : values) {
-                params.add(key, value);
-            }
-        });
-        return params;
-    }
-    // ...
-}
-```
-
-### HelidonContainerRequestContext
-
-Implements `ContainerRequestContext` for request filters:
-
-```java
-public class HelidonContainerRequestContext implements ContainerRequestContext {
-    private final ServerRequest request;
-    private boolean aborted = false;
-    private int abortStatus;
-
-    @Override
-    public void abortWith(Response response) {
-        this.aborted = true;
-        this.abortStatus = response.getStatus();
-    }
-
-    public boolean isAborted() {
-        return aborted;
-    }
-    // ...
-}
-```
 
 ## Maven Multi-Phase Compilation
 
@@ -308,7 +401,7 @@ Since the processor and resources are in the same project, multi-phase compilati
         </configuration>
     </execution>
 
-    <!-- Phase 2: Run annotation processor -->
+    <!-- Phase 2: Run annotation processor on resources -->
     <execution>
         <id>generate-routing</id>
         <phase>process-sources</phase>
@@ -333,6 +426,8 @@ Since the processor and resources are in the same project, multi-phase compilati
             <proc>none</proc>
         </configuration>
     </execution>
+
+    <!-- Similar phases for test compilation -->
 </executions>
 ```
 
@@ -355,7 +450,18 @@ if (matrixParam != null) {
 }
 ```
 
-2. Recompile - the processor automatically generates updated code.
+2. Update `isBodyParameter()` to exclude the new annotation.
+
+### Adding Custom Providers
+
+The processor automatically detects classes with `@Provider` that implement:
+- `ContainerRequestFilter`
+- `ContainerResponseFilter`
+- `ReaderInterceptor`
+- `WriterInterceptor`
+- `ExceptionMapper<T>`
+
+No code changes needed - just add the `@Provider` annotation.
 
 ### Adding Custom Annotations
 
@@ -363,7 +469,7 @@ if (matrixParam != null) {
 
 ```java
 @Target(ElementType.METHOD)
-@Retention(RetentionPolicy.SOURCE)
+@Retention(RetentionPolicy.RUNTIME)  // Note: RUNTIME for @NameBinding
 public @interface RateLimit {
     int value();
 }
@@ -374,7 +480,7 @@ public @interface RateLimit {
 ```java
 RateLimit rateLimit = method.getAnnotation(RateLimit.class);
 if (rateLimit != null) {
-    handler.addContentLine("if (!rateLimiter.tryAcquire()) {");
+    handler.addContentLine("if (!rateLimiter.tryAcquire(" + rateLimit.value() + ")) {");
     handler.increaseContentPadding();
     handler.addContentLine("res.status(429).send(\"Rate limit exceeded\");");
     handler.addContentLine("return;");
@@ -382,3 +488,31 @@ if (rateLimit != null) {
     handler.addContentLine("}");
 }
 ```
+
+## Test Infrastructure
+
+The project uses Helidon's testing framework:
+
+```java
+@ServerTest
+class ParameterExtractionTest {
+    private final WebClient client;
+
+    ParameterExtractionTest(WebClient client) {
+        this.client = client;
+    }
+
+    @SetUpRoute
+    static void routing(HttpRouting.Builder routing) {
+        new TestResource$$JaxRsRouting().register(routing);
+    }
+
+    @Test
+    void testPathParam() {
+        String response = client.get("/test/123").requestEntity(String.class);
+        assertThat(response, is("id:123"));
+    }
+}
+```
+
+Test resources are processed by the same annotation processor during the test compilation phase.

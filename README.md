@@ -9,6 +9,50 @@ Build-time JAX-RS annotation processing for Helidon WebServer. Generates optimiz
 - Direct method calls - no runtime reflection
 - GraalVM native-image compatible
 - Container filters (`ContainerRequestFilter`, `ContainerResponseFilter`)
+- Reader/Writer interceptors (`ReaderInterceptor`, `WriterInterceptor`)
+- Custom exception mappers (`ExceptionMapper`)
+- Filter ordering with `@Priority` and `@NameBinding`
+
+## Supported JAX-RS Features
+
+### HTTP Methods
+- `@GET`, `@POST`, `@PUT`, `@DELETE`, `@PATCH`, `@HEAD`, `@OPTIONS`
+
+### Parameters
+- `@PathParam` - Path parameters (`/users/{id}`)
+- `@QueryParam` - Query string parameters (`?name=value`)
+- `@HeaderParam` - HTTP headers
+- `@CookieParam` - Cookies
+- `@FormParam` - Form data
+- `@DefaultValue` - Default parameter values
+- `@BeanParam` - Aggregate multiple parameters into a bean
+- `List<T>` / `Set<T>` - Multiple values for query/header params
+
+### Return Types
+- POJO classes (serialized to JSON)
+- `jakarta.ws.rs.core.Response` - Full control over status, headers, entity
+- `void` - Returns 204 No Content
+
+### Content Types
+- `@Produces` - Response content type
+- `@Consumes` - Request content type
+
+### Context Injection
+- `@Context UriInfo` - URI information
+- `@Context HttpHeaders` - HTTP headers
+
+### Filters and Interceptors
+- `ContainerRequestFilter` - Pre-processing filter
+- `ContainerResponseFilter` - Post-processing filter
+- `ReaderInterceptor` - Request body interceptor
+- `WriterInterceptor` - Response body interceptor
+- `@PreMatching` - Pre-matching request filters
+- `@Priority` - Filter/interceptor ordering
+- `@NameBinding` - Selective filter application
+
+### Exception Handling
+- `ExceptionMapper<T>` - Custom exception to response mapping
+- Built-in handling for JAX-RS exceptions (NotFoundException, BadRequestException, etc.)
 
 ## Quick Start
 
@@ -28,6 +72,20 @@ public class UserResource {
     @POST
     public User createUser(User user) {
         // ...
+    }
+
+    @GET
+    @Path("/search")
+    public List<User> search(@QueryParam("tag") List<String> tags,
+                             @QueryParam("limit") @DefaultValue("10") Integer limit) {
+        // Supports multiple query param values
+    }
+
+    @DELETE
+    @Path("/{id}")
+    public Response deleteUser(@PathParam("id") Long id) {
+        users.remove(id);
+        return Response.noContent().build();
     }
 }
 ```
@@ -75,112 +133,141 @@ curl http://localhost:8080/users/1
 curl -X POST http://localhost:8080/users -H "Content-Type: application/json" -d '{"name":"Alice"}'
 ```
 
-## Supported JAX-RS Annotations
+## Advanced Features
 
-### HTTP Methods
-- `@GET`, `@POST`, `@PUT`, `@DELETE`, `@PATCH`, `@HEAD`, `@OPTIONS`
+### @BeanParam - Parameter Aggregation
 
-### Parameters
-- `@PathParam` - Path parameters (`/users/{id}`)
-- `@QueryParam` - Query string parameters (`?name=value`)
-- `@HeaderParam` - HTTP headers
-- `@CookieParam` - Cookies
-- `@FormParam` - Form data
-- `@DefaultValue` - Default parameter values
+Aggregate multiple parameters into a single bean:
 
-### Content Types
-- `@Produces` - Response content type
-- `@Consumes` - Request content type
+```java
+public class SearchParams {
+    @QueryParam("q")
+    private String query;
 
-### Context Injection
-- `@Context UriInfo` - URI information
-- `@Context HttpHeaders` - HTTP headers
+    @QueryParam("page")
+    @DefaultValue("1")
+    private Integer page;
 
-### Filters
-- `ContainerRequestFilter` - Pre-processing filter
-- `ContainerResponseFilter` - Post-processing filter
+    @HeaderParam("X-Sort-Order")
+    @DefaultValue("asc")
+    private String sortOrder;
 
-Mark filters with `@Provider` annotation:
+    // getters and setters
+}
+
+@Path("/search")
+public class SearchResource {
+    @GET
+    public List<Result> search(@BeanParam SearchParams params) {
+        // params.getQuery(), params.getPage(), params.getSortOrder()
+    }
+}
+```
+
+### List/Set Parameters
+
+Handle multiple values for the same parameter:
+
+```java
+@GET
+@Path("/filter")
+public List<Item> filter(@QueryParam("tag") List<String> tags,
+                         @QueryParam("id") Set<Long> ids) {
+    // tags = ["java", "kotlin"] from ?tag=java&tag=kotlin
+    // ids = Set of unique IDs
+}
+```
+
+### Response Return Type
+
+Full control over HTTP response:
+
+```java
+@POST
+public Response createUser(User user) {
+    User created = service.save(user);
+    return Response.status(201)
+            .header("X-Created-Id", created.getId())
+            .entity(created)
+            .build();
+}
+
+@DELETE
+@Path("/{id}")
+public Response delete(@PathParam("id") Long id) {
+    service.delete(id);
+    return Response.noContent().build();
+}
+```
+
+### Custom Exception Mappers
+
+Map exceptions to HTTP responses:
 
 ```java
 @Provider
-public class LoggingFilter implements ContainerRequestFilter, ContainerResponseFilter {
-
+public class BusinessExceptionMapper implements ExceptionMapper<BusinessException> {
     @Override
-    public void filter(ContainerRequestContext requestContext) {
-        // Called before resource method
-    }
-
-    @Override
-    public void filter(ContainerRequestContext requestContext,
-                       ContainerResponseContext responseContext) {
-        // Called after resource method
+    public Response toResponse(BusinessException e) {
+        return Response.status(422)
+                .header("X-Error-Code", e.getErrorCode())
+                .entity(new ErrorResponse(e.getMessage()))
+                .build();
     }
 }
 ```
 
-## Generated Code
-
-For this resource:
+### Filters with Priority and Name Binding
 
 ```java
-@Path("/users")
-public class UserResource {
-    @GET
-    @Path("/{id}")
-    public User getUser(@PathParam("id") Long id) {
-        return users.get(id);
-    }
-}
-```
-
-The processor generates:
-
-```java
-@Generated("io.helidon.examples.jaxrs.apt.processor.JaxRsProcessor")
-public final class UserResource$$JaxRsRouting {
-
-    private final UserResource resource;
-    private final ObjectMapper objectMapper;
-    private final List<ContainerRequestFilter> requestFilters;
-    private final List<ContainerResponseFilter> responseFilters;
-
-    public void register(HttpRouting.Builder routing) {
-        routing.get("/users/{id}", this::getUser_handler);
-    }
-
-    private void getUser_handler(ServerRequest req, ServerResponse res) {
-        try {
-            // Run request filters
-            HelidonContainerRequestContext requestContext = new HelidonContainerRequestContext(req);
-            for (var filter : requestFilters) {
-                filter.filter(requestContext);
-                if (requestContext.isAborted()) {
-                    res.status(requestContext.getAbortStatus()).send(requestContext.getAbortMessage());
-                    return;
-                }
-            }
-
-            // Extract parameters and call resource method
-            Long id = Long.parseLong(req.path().pathParameters().get("id"));
-            User result = resource.getUser(id);
-
-            // Run response filters
-            HelidonContainerResponseContext responseContext = new HelidonContainerResponseContext(200, result);
-            for (var filter : responseFilters) {
-                filter.filter(requestContext, responseContext);
-            }
-
-            // Send response
-            String json = objectMapper.writeValueAsString(responseContext.getEntity());
-            res.status(responseContext.getStatus()).header("Content-Type", "application/json").send(json);
-        } catch (NotFoundException e) {
-            res.status(404).send(e.getMessage());
-        } catch (WebApplicationException e) {
-            res.status(e.getResponse().getStatus()).send(e.getMessage());
-        } catch (Exception e) {
-            res.status(500).send("Internal Server Error: " + e.getMessage());
+// Global filter with priority (lower = executes first for requests)
+@Provider
+@Priority(100)
+public class AuthFilter implements ContainerRequestFilter {
+    @Override
+    public void filter(ContainerRequestContext ctx) {
+        if (!isAuthenticated(ctx)) {
+            ctx.abortWith(Response.status(401).build());
         }
+    }
+}
+
+// Name-bound filter (only applies to annotated methods)
+@NameBinding
+@Target({ElementType.TYPE, ElementType.METHOD})
+@Retention(RetentionPolicy.RUNTIME)
+public @interface Logged {}
+
+@Provider
+@Logged
+public class LoggingFilter implements ContainerRequestFilter {
+    // Only applies to @Logged methods
+}
+
+@Path("/api")
+public class ApiResource {
+    @GET
+    @Logged  // LoggingFilter applies here
+    public String getData() { ... }
+}
+```
+
+### Reader/Writer Interceptors
+
+```java
+@Provider
+@Priority(100)
+public class GzipInterceptor implements ReaderInterceptor, WriterInterceptor {
+    @Override
+    public Object aroundReadFrom(ReaderInterceptorContext ctx) throws IOException {
+        // Decompress request body
+        return ctx.proceed();
+    }
+
+    @Override
+    public void aroundWriteTo(WriterInterceptorContext ctx) throws IOException {
+        // Compress response body
+        ctx.proceed();
     }
 }
 ```
@@ -188,35 +275,37 @@ public final class UserResource$$JaxRsRouting {
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│              JAX-RS Resource Classes                │
-│  @Path("/users") class UserResource { ... }         │
-└─────────────────────────────────────────────────────┘
-                       │
-                       │ Compile time
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│          Annotation Processor (APT)                 │
-│  JaxRsProcessor scans @Path, @Provider classes      │
-│  Generates optimized routing code                   │
-└─────────────────────────────────────────────────────┘
-                       │
-                       │ Generates
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│       Generated Routing Classes                     │
-│  UserResource$$JaxRsRouting                         │
-│  - Direct method calls                              │
-│  - Type-safe parameter extraction                   │
-│  - Filter chain execution                           │
-└─────────────────────────────────────────────────────┘
-                       │
-                       │ Runtime
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│         Helidon WebServer (Virtual Threads)         │
-│  Request → Filters → Handler → Filters → Response   │
-└─────────────────────────────────────────────────────┘
++-----------------------------------------------------+
+|              JAX-RS Resource Classes                |
+|  @Path("/users") class UserResource { ... }         |
++-----------------------------------------------------+
+                       |
+                       | Compile time
+                       v
++-----------------------------------------------------+
+|          Annotation Processor (APT)                 |
+|  JaxRsProcessor scans @Path, @Provider classes      |
+|  - Collects filters, interceptors, exception mappers|
+|  - Generates optimized routing code                 |
++-----------------------------------------------------+
+                       |
+                       | Generates
+                       v
++-----------------------------------------------------+
+|       Generated Routing Classes                     |
+|  UserResource$$JaxRsRouting                         |
+|  - Direct method calls                              |
+|  - Type-safe parameter extraction                   |
+|  - Filter/interceptor chain execution               |
+|  - Exception mapper lookup                          |
++-----------------------------------------------------+
+                       |
+                       | Runtime
+                       v
++-----------------------------------------------------+
+|         Helidon WebServer (Virtual Threads)         |
+|  Request -> Filters -> Handler -> Filters -> Response|
++-----------------------------------------------------+
 ```
 
 ## Project Structure
@@ -231,12 +320,37 @@ src/main/java/io/helidon/examples/jaxrs/apt/
 ├── processor/
 │   └── JaxRsProcessor.java   # Annotation processor
 └── runtime/
-    ├── Generated.java                      # Marker annotation
-    ├── HelidonUriInfo.java                 # UriInfo implementation
-    ├── HelidonHttpHeaders.java             # HttpHeaders implementation
-    ├── HelidonContainerRequestContext.java # Request filter context
-    └── HelidonContainerResponseContext.java# Response filter context
+    ├── Generated.java                       # Marker annotation
+    ├── FilterContext.java                   # Filter/interceptor/mapper registry
+    ├── SimpleRuntimeDelegate.java           # JAX-RS RuntimeDelegate impl
+    ├── HelidonUriInfo.java                  # UriInfo implementation
+    ├── HelidonHttpHeaders.java              # HttpHeaders implementation
+    ├── HelidonContainerRequestContext.java  # Request filter context
+    ├── HelidonContainerResponseContext.java # Response filter context
+    ├── HelidonReaderInterceptorContext.java # Reader interceptor context
+    └── HelidonWriterInterceptorContext.java # Writer interceptor context
 ```
+
+## Testing
+
+Run all tests:
+```bash
+mvn test
+```
+
+Run integration tests only:
+```bash
+mvn test -Pintegration-tests
+```
+
+The project includes 94 tests covering:
+- Parameter extraction (path, query, header, cookie, form, bean)
+- Collection parameters (List/Set)
+- Response return types
+- Filter ordering and execution
+- Interceptor chains
+- Exception mappers
+- CRUD operations
 
 ## Requirements
 
