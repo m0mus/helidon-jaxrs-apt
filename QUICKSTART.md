@@ -98,8 +98,10 @@ public class ProductResource {
 
     @GET
     @Path("/{id}")
-    public Product getProduct(@PathParam("id") Long id) {
-        return productService.findById(id);
+    public Product getProduct(@PathParam("id") Long id,
+                              @MatrixParam("color") String color) {
+        // URL: /products/123;color=red
+        return productService.findById(id, color);
     }
 
     @POST

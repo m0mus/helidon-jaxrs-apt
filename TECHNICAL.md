@@ -201,6 +201,10 @@ handler.addContent("String session = req.headers().cookies().first(\"session\").
 
 // @FormParam (requires caching form data)
 handler.addContent("String field = _formParams.first(\"field\").orElse(null);");
+
+// @MatrixParam
+handler.addContent("String _color = req.path().matrixParameters().first(\"color\").orElse(null);");
+handler.addContent("String color = _color;");
 ```
 
 ### Collection Parameters (List/Set)

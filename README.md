@@ -24,6 +24,7 @@ Build-time JAX-RS annotation processing for Helidon WebServer. Generates optimiz
 - `@HeaderParam` - HTTP headers
 - `@CookieParam` - Cookies
 - `@FormParam` - Form data
+- `@MatrixParam` - Matrix parameters (`/path;param=value`)
 - `@DefaultValue` - Default parameter values
 - `@BeanParam` - Aggregate multiple parameters into a bean
 - `List<T>` / `Set<T>` - Multiple values for query/header params
@@ -175,6 +176,28 @@ public List<Item> filter(@QueryParam("tag") List<String> tags,
                          @QueryParam("id") Set<Long> ids) {
     // tags = ["java", "kotlin"] from ?tag=java&tag=kotlin
     // ids = Set of unique IDs
+}
+```
+
+### Matrix Parameters
+
+Matrix parameters are embedded in path segments:
+
+```java
+@GET
+@Path("/products/{id}")
+public Product getProduct(@PathParam("id") Long id,
+                          @MatrixParam("color") String color,
+                          @MatrixParam("size") @DefaultValue("M") String size) {
+    // URL: /products/123;color=red;size=L
+    // id = 123, color = "red", size = "L"
+}
+
+@GET
+@Path("/filter")
+public List<Item> filter(@MatrixParam("status") String status,
+                         @MatrixParam("limit") @DefaultValue("20") Integer limit) {
+    // URL: /filter;status=active;limit=10
 }
 ```
 
@@ -343,8 +366,8 @@ Run integration tests only:
 mvn test -Pintegration-tests
 ```
 
-The project includes 94 tests covering:
-- Parameter extraction (path, query, header, cookie, form, bean)
+The project includes 106 tests covering:
+- Parameter extraction (path, query, header, cookie, form, matrix, bean)
 - Collection parameters (List/Set)
 - Response return types
 - Filter ordering and execution
