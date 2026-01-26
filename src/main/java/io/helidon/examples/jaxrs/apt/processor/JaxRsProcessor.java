@@ -823,6 +823,7 @@ public class JaxRsProcessor extends AbstractProcessor {
                 && param.getAnnotation(QueryParam.class) == null
                 && param.getAnnotation(HeaderParam.class) == null
                 && param.getAnnotation(CookieParam.class) == null
+                && param.getAnnotation(MatrixParam.class) == null
                 && param.getAnnotation(FormParam.class) == null
                 && param.getAnnotation(Context.class) == null
                 && param.getAnnotation(BeanParam.class) == null
@@ -858,6 +859,12 @@ public class JaxRsProcessor extends AbstractProcessor {
         CookieParam cookieParam = param.getAnnotation(CookieParam.class);
         if (cookieParam != null) {
             generateCookieParam(handler, typeName, varName, cookieParam.value(), defaultVal);
+            return varName;
+        }
+
+        MatrixParam matrixParam = param.getAnnotation(MatrixParam.class);
+        if (matrixParam != null) {
+            generateMatrixParam(handler, typeName, varName, matrixParam.value(), type, defaultVal);
             return varName;
         }
 
@@ -933,6 +940,12 @@ public class JaxRsProcessor extends AbstractProcessor {
             return;
         }
 
+        MatrixParam matrixParam = field.getAnnotation(MatrixParam.class);
+        if (matrixParam != null) {
+            generateBeanFieldMatrixParam(handler, beanVar, setterName, matrixParam.value(), fieldType, defaultVal);
+            return;
+        }
+
         FormParam formParam = field.getAnnotation(FormParam.class);
         if (formParam != null) {
             generateBeanFieldFormParam(handler, beanVar, setterName, formParam.value(), fieldType, defaultVal);
@@ -993,6 +1006,24 @@ public class JaxRsProcessor extends AbstractProcessor {
 
         handler.addContent(beanVar).addContent(".").addContent(setter).addContent("(")
                 .addContent(tempVar).addContentLine(");");
+    }
+
+    private void generateBeanFieldMatrixParam(Method.Builder handler, String beanVar, String setter, String paramName, String type, String defaultVal) {
+        String tempVar = "_bm_" + paramName.replace("-", "_");
+        String defaultExpr = defaultVal != null ? "\"" + escapeJavaString(defaultVal) + "\"" : "null";
+
+        handler.addContent("String ").addContent(tempVar).addContent(" = req.path().matrixParameters().first(\"")
+                .addContent(escapeJavaString(paramName)).addContent("\").orElse(").addContent(defaultExpr).addContentLine(");");
+
+        if (needsConversion(type)) {
+            handler.addContent("if (").addContent(tempVar).addContentLine(" != null) {");
+            handler.addContent("    ").addContent(beanVar).addContent(".").addContent(setter).addContent("(")
+                    .addContent(convertType(tempVar, type)).addContentLine(");");
+            handler.addContentLine("}");
+        } else {
+            handler.addContent(beanVar).addContent(".").addContent(setter).addContent("(")
+                    .addContent(tempVar).addContentLine(");");
+        }
     }
 
     private void generateBeanFieldFormParam(Method.Builder handler, String beanVar, String setter, String paramName, String type, String defaultVal) {
@@ -1143,6 +1174,26 @@ public class JaxRsProcessor extends AbstractProcessor {
         handler.addContent(typeName).addContent(" ").addContent(varName)
                 .addContent(" = req.headers().cookies().first(\"").addContent(escapeJavaString(paramName))
                 .addContent("\").orElse(").addContent(defaultExpr).addContentLine(");");
+    }
+
+    private void generateMatrixParam(Method.Builder handler, TypeName typeName, String varName, String paramName, String type, String defaultVal) {
+        String defaultExpr = defaultVal != null ? "\"" + escapeJavaString(defaultVal) + "\"" : "null";
+
+        // Matrix parameters are extracted from the path segment
+        // Format: /path;param1=value1;param2=value2
+        handler.addContent("String _").addContent(varName)
+                .addContent(" = req.path().matrixParameters().first(\"")
+                .addContent(escapeJavaString(paramName)).addContent("\").orElse(").addContent(defaultExpr).addContentLine(");");
+
+        if (needsConversion(type)) {
+            handler.addContent(typeName).addContent(" ").addContent(varName).addContent(" = _")
+                    .addContent(varName).addContent(" != null ? ")
+                    .addContent(convertType("_" + varName, type))
+                    .addContentLine(" : null;");
+        } else {
+            handler.addContent(typeName).addContent(" ").addContent(varName).addContent(" = _")
+                    .addContent(varName).addContentLine(";");
+        }
     }
 
     private void generateFormParam(Method.Builder handler, TypeName typeName, String varName, String paramName, String type, String defaultVal) {
