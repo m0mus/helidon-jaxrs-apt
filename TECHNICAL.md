@@ -162,19 +162,22 @@ private void generateHandler(RouteInfo route, ClassModel.Builder classBuilder) {
     // 2. Request filters (with name binding support)
     generateRequestFilters(handler, route.nameBindings());
 
-    // 3. Parameter extraction
+    // 3. Content negotiation
+    generateContentNegotiation(handler, route);
+
+    // 4. Parameter extraction
     List<String> paramNames = extractParameters(route.method(), handler);
 
-    // 4. Method invocation with reader interceptors
+    // 5. Method invocation with reader interceptors
     generateMethodInvocation(handler, route, paramNames);
 
-    // 5. Response filters
+    // 6. Response filters
     generateResponseFilters(handler);
 
-    // 6. Writer interceptors and response sending
+    // 7. Writer interceptors and response sending
     generateResponseSending(handler);
 
-    // 7. Exception handling with ExceptionMapper support
+    // 8. Exception handling with ExceptionMapper support
     generateExceptionHandling(handler);
 }
 ```
@@ -246,6 +249,44 @@ handler.addContent("UriInfo uriInfo = new HelidonUriInfo(req);");
 // HttpHeaders
 handler.addContent("HttpHeaders headers = new HelidonHttpHeaders(req);");
 ```
+
+## Content Negotiation
+
+The processor validates Content-Type and Accept headers against @Consumes and @Produces annotations:
+
+### @Consumes Validation
+
+For POST/PUT/PATCH methods with @Consumes, validates Content-Type header:
+
+```java
+// Content-Type validation
+String _contentType = req.headers().contentType().map(ct -> ct.mediaType().text()).orElse(null);
+if (_contentType != null && !matchesMediaType(_contentType, new String[]{"application/json"})) {
+    res.status(415).send("Unsupported Media Type");
+    return;
+}
+```
+
+### Accept Header Validation
+
+For methods with @Produces, validates Accept header:
+
+```java
+// Accept header validation
+String _accept = req.headers().first(HeaderNames.ACCEPT).orElse("*/*");
+if (!acceptsMediaType(_accept, new String[]{"application/json", "application/xml"})) {
+    res.status(406).send("Not Acceptable");
+    return;
+}
+```
+
+### Media Type Matching
+
+Generated helper methods support:
+- Exact matches (`application/json`)
+- Wildcard types (`*/*`, `text/*`, `application/*`)
+- Quality factors in Accept header (`text/html, application/json;q=0.9`)
+- Content-Type parameters (`application/json; charset=utf-8`)
 
 ## Response Handling
 

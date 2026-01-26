@@ -34,9 +34,10 @@ Build-time JAX-RS annotation processing for Helidon WebServer. Generates optimiz
 - `jakarta.ws.rs.core.Response` - Full control over status, headers, entity
 - `void` - Returns 204 No Content
 
-### Content Types
-- `@Produces` - Response content type
-- `@Consumes` - Request content type
+### Content Types & Negotiation
+- `@Produces` - Response content type (validates Accept header, returns 406 if not acceptable)
+- `@Consumes` - Request content type (validates Content-Type header, returns 415 if unsupported)
+- Wildcard media types supported (`text/*`, `application/*`, `*/*`)
 
 ### Context Injection
 - `@Context UriInfo` - URI information
@@ -366,9 +367,10 @@ Run integration tests only:
 mvn test -Pintegration-tests
 ```
 
-The project includes 106 tests covering:
+The project includes 134 tests covering:
 - Parameter extraction (path, query, header, cookie, form, matrix, bean)
 - Collection parameters (List/Set)
+- Content negotiation (@Consumes, @Produces, Accept header validation)
 - Response return types
 - Filter ordering and execution
 - Interceptor chains
