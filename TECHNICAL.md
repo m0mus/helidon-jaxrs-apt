@@ -248,7 +248,19 @@ handler.addContent("UriInfo uriInfo = new HelidonUriInfo(req);");
 
 // HttpHeaders
 handler.addContent("HttpHeaders headers = new HelidonHttpHeaders(req);");
+
+// SecurityContext
+handler.addContent("SecurityContext securityContext = new HelidonSecurityContext(req);");
 ```
+
+### SecurityContext Implementation
+
+`HelidonSecurityContext` extracts security information from HTTP headers:
+
+- **getUserPrincipal()**: Extracts username from Basic auth header (base64 decoded)
+- **isUserInRole(role)**: Checks against `X-User-Roles` header (comma-separated)
+- **isSecure()**: Returns true if scheme is HTTPS
+- **getAuthenticationScheme()**: Returns BASIC, BEARER, or DIGEST based on Authorization header
 
 ## Content Negotiation
 

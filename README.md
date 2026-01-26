@@ -42,6 +42,7 @@ Build-time JAX-RS annotation processing for Helidon WebServer. Generates optimiz
 ### Context Injection
 - `@Context UriInfo` - URI information
 - `@Context HttpHeaders` - HTTP headers
+- `@Context SecurityContext` - Authentication and authorization info
 
 ### Filters and Interceptors
 - `ContainerRequestFilter` - Pre-processing filter
@@ -367,10 +368,11 @@ Run integration tests only:
 mvn test -Pintegration-tests
 ```
 
-The project includes 134 tests covering:
+The project includes 151 tests covering:
 - Parameter extraction (path, query, header, cookie, form, matrix, bean)
 - Collection parameters (List/Set)
 - Content negotiation (@Consumes, @Produces, Accept header validation)
+- Context injection (UriInfo, HttpHeaders, SecurityContext)
 - Response return types
 - Filter ordering and execution
 - Interceptor chains
