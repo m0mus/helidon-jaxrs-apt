@@ -45,6 +45,7 @@ public class JaxRsProcessor extends AbstractProcessor {
     private static final TypeName GENERATED = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.Generated");
     private static final TypeName URI_INFO = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.HelidonUriInfo");
     private static final TypeName HTTP_HEADERS = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.HelidonHttpHeaders");
+    private static final TypeName SECURITY_CONTEXT = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.HelidonSecurityContext");
     private static final TypeName FILTER_CONTEXT = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.FilterContext");
     private static final TypeName REQUEST_CONTEXT = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.HelidonContainerRequestContext");
     private static final TypeName RESPONSE_CONTEXT = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.HelidonContainerResponseContext");
@@ -1343,6 +1344,10 @@ public class JaxRsProcessor extends AbstractProcessor {
         } else if (type.equals("jakarta.ws.rs.core.HttpHeaders")) {
             handler.addContent(HTTP_HEADERS).addContent(" ").addContent(varName)
                     .addContent(" = new ").addContent(HTTP_HEADERS).addContentLine("(req);");
+            return varName;
+        } else if (type.equals("jakarta.ws.rs.core.SecurityContext")) {
+            handler.addContent(SECURITY_CONTEXT).addContent(" ").addContent(varName)
+                    .addContent(" = new ").addContent(SECURITY_CONTEXT).addContentLine("(req);");
             return varName;
         }
         return null;
