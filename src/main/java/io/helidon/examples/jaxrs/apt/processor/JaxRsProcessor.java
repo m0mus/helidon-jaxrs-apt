@@ -360,21 +360,123 @@ public class JaxRsProcessor extends AbstractProcessor {
             String path = fullPath.isEmpty() ? "/" : fullPath;
             Set<String> methodBindings = getNameBindings(method, resourceClass);
 
-            routes.add(new RouteInfo(httpMethod, path, method, classProduces, classConsumes, methodBindings));
+            routes.add(new RouteInfo(httpMethod, path, method, classProduces, classConsumes, methodBindings, null));
         }
 
-        // Sort: specific paths before parameterized, then by HTTP method for determinism
+        // Collect sub-resource locator routes
+        collectSubResourceRoutes(resourceClass, basePath, classProduces, classConsumes, routes);
+
+        // Sort routes: more specific paths come before less specific (parameterized) paths
+        // Routes with fewer path parameters should come first when they have same depth
         routes.sort((a, b) -> {
-            boolean aParam = a.path.contains("{");
-            boolean bParam = b.path.contains("{");
-            if (aParam != bParam) return aParam ? 1 : -1;
-            int lenDiff = b.path.length() - a.path.length();
+            // Count path parameters in each route
+            long aParamCount = a.path.chars().filter(c -> c == '{').count();
+            long bParamCount = b.path.chars().filter(c -> c == '{').count();
+
+            // Routes with fewer params are more specific, come first
+            if (aParamCount != bParamCount) {
+                return Long.compare(aParamCount, bParamCount);
+            }
+
+            // Compare segment-by-segment: literals before params at same position
+            String[] aSegments = a.path.split("/");
+            String[] bSegments = b.path.split("/");
+            int minLen = Math.min(aSegments.length, bSegments.length);
+
+            for (int i = 0; i < minLen; i++) {
+                boolean aIsParam = aSegments[i].contains("{");
+                boolean bIsParam = bSegments[i].contains("{");
+                if (aIsParam != bIsParam) {
+                    // Literal segment comes before parameterized segment
+                    return aIsParam ? 1 : -1;
+                }
+            }
+
+            // More segments (longer path) comes first
+            int lenDiff = bSegments.length - aSegments.length;
             if (lenDiff != 0) return lenDiff;
+
+            // Finally, sort by path string and HTTP method for determinism
             int pathCmp = a.path.compareTo(b.path);
             return pathCmp != 0 ? pathCmp : a.httpMethod.compareTo(b.httpMethod);
         });
 
         return routes;
+    }
+
+    private void collectSubResourceRoutes(TypeElement resourceClass, String basePath, String classProduces, String classConsumes, List<RouteInfo> routes) {
+        for (Element enclosed : resourceClass.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.METHOD) {
+                continue;
+            }
+
+            ExecutableElement method = (ExecutableElement) enclosed;
+
+            // Sub-resource locator: has @Path but no HTTP method
+            Path pathAnnotation = method.getAnnotation(Path.class);
+            if (pathAnnotation == null) {
+                continue;
+            }
+
+            String httpMethod = getHttpMethod(method);
+            if (httpMethod != null) {
+                // Regular resource method, already handled
+                continue;
+            }
+
+            // This is a sub-resource locator
+            String locatorPath = normalizePath(pathAnnotation.value());
+            String combinedPath = basePath + locatorPath;
+
+            // Get the return type as the sub-resource class
+            TypeMirror returnType = method.getReturnType();
+            if (returnType.getKind() != TypeKind.DECLARED) {
+                error("Sub-resource locator must return a class type", method);
+                continue;
+            }
+
+            TypeElement subResourceType = (TypeElement) processingEnv.getTypeUtils().asElement(returnType);
+            if (subResourceType == null) {
+                error("Cannot resolve sub-resource type", method);
+                continue;
+            }
+
+            log("Found sub-resource locator: " + method.getSimpleName() + " -> " + subResourceType.getQualifiedName());
+
+            SubResourceInfo subResource = new SubResourceInfo(method, subResourceType);
+
+            // Get @Produces/@Consumes from sub-resource class (or inherit from parent)
+            String subProduces = getProduces(subResourceType);
+            if (subProduces == null) subProduces = classProduces;
+            String subConsumes = getConsumes(subResourceType);
+            if (subConsumes == null) subConsumes = classConsumes;
+
+            // Collect routes from the sub-resource class
+            for (Element subEnclosed : subResourceType.getEnclosedElements()) {
+                if (subEnclosed.getKind() != ElementKind.METHOD) {
+                    continue;
+                }
+
+                ExecutableElement subMethod = (ExecutableElement) subEnclosed;
+                String subHttpMethod = getHttpMethod(subMethod);
+                if (subHttpMethod == null) {
+                    continue; // Could recursively handle nested sub-resources, but skip for now
+                }
+
+                String subMethodPath = getMethodPath(subMethod);
+                String fullPath = combinedPath + subMethodPath;
+                String path = fullPath.isEmpty() ? "/" : fullPath;
+                Set<String> methodBindings = getNameBindings(subMethod, subResourceType);
+
+                // Use sub-resource's @Produces/@Consumes if specified
+                String methodProduces = getProduces(subMethod);
+                if (methodProduces == null) methodProduces = subProduces;
+                String methodConsumes = getConsumes(subMethod);
+                if (methodConsumes == null) methodConsumes = subConsumes;
+
+                routes.add(new RouteInfo(subHttpMethod, path, subMethod, methodProduces, methodConsumes, methodBindings, subResource));
+            }
+        }
     }
 
     private void addRegisterMethod(ClassModel.Builder classBuilder, List<RouteInfo> routes) {
@@ -461,13 +563,20 @@ public class JaxRsProcessor extends AbstractProcessor {
         ExecutableElement method = route.method;
         String methodName = method.getSimpleName().toString();
 
+        String javadocRef;
+        if (route.isSubResource()) {
+            javadocRef = route.subResource.subResourceType.getSimpleName() + "#" + methodName;
+        } else {
+            javadocRef = resourceClass.getSimpleName() + "#" + methodName;
+        }
+
         Method.Builder handler = Method.builder()
                 .name(route.handlerName())
                 .accessModifier(AccessModifier.PRIVATE)
                 .addParameter(p -> p.name("req").type(SERVER_REQUEST))
                 .addParameter(p -> p.name("res").type(SERVER_RESPONSE))
                 .javadoc(Javadoc.builder()
-                        .addLine("Handler for {@link " + resourceClass.getSimpleName() + "#" + methodName + "}.")
+                        .addLine("Handler for {@link " + javadocRef + "}.")
                         .build());
 
         // Create request context and method bindings before try block so they're accessible in catch blocks
@@ -487,6 +596,12 @@ public class JaxRsProcessor extends AbstractProcessor {
         // Content negotiation checks
         generateContentNegotiation(handler, route);
 
+        // For sub-resource routes, first get the sub-resource instance
+        String targetObject = "resource";
+        if (route.isSubResource()) {
+            targetObject = generateSubResourceLocator(handler, route);
+        }
+
         // Extract parameters
         List<String> paramNames = new ArrayList<>();
         BodyParamInfo bodyParam = extractParameters(method, handler, paramNames);
@@ -497,7 +612,7 @@ public class JaxRsProcessor extends AbstractProcessor {
         }
 
         // Invoke resource method and handle response
-        generateMethodInvocation(handler, route, method, paramNames);
+        generateMethodInvocation(handler, route, method, paramNames, targetObject);
 
         handler.decreaseContentPadding();
         generateExceptionHandling(handler);
@@ -599,6 +714,32 @@ public class JaxRsProcessor extends AbstractProcessor {
         return sb.toString();
     }
 
+    private String generateSubResourceLocator(Method.Builder handler, RouteInfo route) {
+        SubResourceInfo subResource = route.subResource;
+        ExecutableElement locatorMethod = subResource.locatorMethod;
+        TypeElement subResourceType = subResource.subResourceType;
+
+        // Extract parameters for the locator method
+        List<String> locatorParamNames = new ArrayList<>();
+        for (VariableElement param : locatorMethod.getParameters()) {
+            String name = extractParameter(param, handler);
+            if (name != null) {
+                locatorParamNames.add(name);
+            }
+        }
+
+        // Call the locator method to get the sub-resource instance
+        String locatorArgs = String.join(", ", locatorParamNames);
+        String subResourceVar = "_subResource";
+        TypeName subResourceTypeName = TypeName.create(subResourceType.getQualifiedName().toString());
+
+        handler.addContent(subResourceTypeName).addContent(" ").addContent(subResourceVar)
+                .addContent(" = resource.").addContent(locatorMethod.getSimpleName().toString())
+                .addContent("(").addContent(locatorArgs).addContentLine(");");
+
+        return subResourceVar;
+    }
+
     private BodyParamInfo extractParameters(ExecutableElement method, Method.Builder handler, List<String> paramNames) {
         BodyParamInfo bodyParam = null;
 
@@ -657,9 +798,9 @@ public class JaxRsProcessor extends AbstractProcessor {
         paramNames.add(bodyParam.name);
     }
 
-    private void generateMethodInvocation(Method.Builder handler, RouteInfo route, ExecutableElement method, List<String> paramNames) {
+    private void generateMethodInvocation(Method.Builder handler, RouteInfo route, ExecutableElement method, List<String> paramNames, String targetObject) {
         String args = String.join(", ", paramNames);
-        String invocation = "resource." + method.getSimpleName() + "(" + args + ")";
+        String invocation = targetObject + "." + method.getSimpleName() + "(" + args + ")";
 
         TypeMirror returnType = method.getReturnType();
         String produces = getProduces(method);
@@ -1502,11 +1643,19 @@ public class JaxRsProcessor extends AbstractProcessor {
 
     // Internal data classes
     private record FilterInfo(TypeElement typeElement, int priority, Set<String> nameBindings) {}
-    private record RouteInfo(String httpMethod, String path, ExecutableElement method, String classProduces, String classConsumes, Set<String> nameBindings) {
+    private record RouteInfo(String httpMethod, String path, ExecutableElement method, String classProduces, String classConsumes, Set<String> nameBindings, SubResourceInfo subResource) {
         String handlerName() {
+            if (subResource != null) {
+                return subResource.locatorMethod.getSimpleName() + "_" + method.getSimpleName() + "_handler";
+            }
             return method.getSimpleName() + "_handler";
         }
+
+        boolean isSubResource() {
+            return subResource != null;
+        }
     }
+    private record SubResourceInfo(ExecutableElement locatorMethod, TypeElement subResourceType) {}
     private record BodyParamInfo(String name, String type) {}
     private record ExceptionMapperInfo(TypeElement typeElement, String exceptionType, int priority) {}
 }
