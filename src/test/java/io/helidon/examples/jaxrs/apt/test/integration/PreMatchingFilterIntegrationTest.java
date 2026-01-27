@@ -1,6 +1,7 @@
 package io.helidon.examples.jaxrs.apt.test.integration;
 
 import io.helidon.examples.jaxrs.apt.test.resources.TestFilterResource$$JaxRsRouting;
+import io.helidon.examples.jaxrs.apt.test.util.FilterOrderTracker;
 import io.helidon.http.HeaderNames;
 import io.helidon.webclient.api.WebClient;
 import io.helidon.webserver.testing.junit5.ServerTest;
@@ -178,5 +179,139 @@ class PreMatchingFilterIntegrationTest {
         assertThat(response.status().code(), is(200));
         String body = response.as(String.class);
         assertThat(body, containsString("deleted"));
+    }
+
+    // ========== @Context Injection Tests ==========
+
+    @Test
+    @DisplayName("Pre-matching filter can access @Context UriInfo with correct path")
+    void testPreMatchingFilterUriInfoAccess() {
+        FilterOrderTracker.clear();
+
+        var response = client.get("/filter/test")
+                .header(HeaderNames.create("X-Test-PreMatching-Context"), "true")
+                .request();
+
+        assertThat(response.status().code(), is(200));
+
+        var requestFilters = FilterOrderTracker.getRequestFilterOrder();
+        // Find the detailed context filter entry
+        String contextEntry = requestFilters.stream()
+                .filter(s -> s.startsWith("PreMatchingContextFilter:") && s.contains("path="))
+                .findFirst()
+                .orElse("");
+
+        assertThat("UriInfo.getPath() should return the request path",
+                contextEntry, containsString("path=/filter/test"));
+    }
+
+    @Test
+    @DisplayName("Pre-matching filter can access @Context HttpHeaders with custom header")
+    void testPreMatchingFilterHttpHeadersAccess() {
+        FilterOrderTracker.clear();
+
+        var response = client.get("/filter/test")
+                .header(HeaderNames.create("X-Test-PreMatching-Context"), "true")
+                .header(HeaderNames.create("X-Custom-Test-Header"), "test-value-123")
+                .request();
+
+        assertThat(response.status().code(), is(200));
+
+        var requestFilters = FilterOrderTracker.getRequestFilterOrder();
+        String contextEntry = requestFilters.stream()
+                .filter(s -> s.startsWith("PreMatchingContextFilter:") && s.contains("customHeader="))
+                .findFirst()
+                .orElse("");
+
+        assertThat("HttpHeaders should read custom header value",
+                contextEntry, containsString("customHeader=test-value-123"));
+    }
+
+    @Test
+    @DisplayName("Pre-matching filter can access @Context SecurityContext")
+    void testPreMatchingFilterSecurityContextAccess() {
+        FilterOrderTracker.clear();
+
+        var response = client.get("/filter/test")
+                .header(HeaderNames.create("X-Test-PreMatching-Context"), "true")
+                .request();
+
+        assertThat(response.status().code(), is(200));
+
+        var requestFilters = FilterOrderTracker.getRequestFilterOrder();
+        String contextEntry = requestFilters.stream()
+                .filter(s -> s.startsWith("PreMatchingContextFilter:") && s.contains("secure="))
+                .findFirst()
+                .orElse("");
+
+        // HTTP test client is not secure
+        assertThat("SecurityContext.isSecure() should work",
+                contextEntry, containsString("secure=false"));
+    }
+
+    @Test
+    @DisplayName("Pre-matching filter CANNOT access @Context ResourceInfo (not yet available)")
+    void testPreMatchingFilterResourceInfoNotAvailable() {
+        FilterOrderTracker.clear();
+
+        var response = client.get("/filter/test")
+                .header(HeaderNames.create("X-Test-PreMatching-Context"), "true")
+                .request();
+
+        assertThat(response.status().code(), is(200));
+
+        var requestFilters = FilterOrderTracker.getRequestFilterOrder();
+        String contextEntry = requestFilters.stream()
+                .filter(s -> s.startsWith("PreMatchingContextFilter:") && s.contains("resourceInfo="))
+                .findFirst()
+                .orElse("");
+
+        // ResourceInfo should not be available in pre-matching filters
+        assertThat("ResourceInfo should NOT be available in pre-matching filter",
+                contextEntry, containsString("resourceInfo=NOT_AVAILABLE"));
+    }
+
+    @Test
+    @DisplayName("Pre-matching filter context works with different request paths")
+    void testPreMatchingFilterContextWithDifferentPaths() {
+        FilterOrderTracker.clear();
+
+        // Test with /filter/audited path
+        var response = client.get("/filter/audited")
+                .header(HeaderNames.create("X-Test-PreMatching-Context"), "true")
+                .request();
+
+        assertThat(response.status().code(), is(200));
+
+        var requestFilters = FilterOrderTracker.getRequestFilterOrder();
+        String contextEntry = requestFilters.stream()
+                .filter(s -> s.startsWith("PreMatchingContextFilter:") && s.contains("path="))
+                .findFirst()
+                .orElse("");
+
+        assertThat("UriInfo should reflect the actual request path",
+                contextEntry, containsString("path=/filter/audited"));
+    }
+
+    @Test
+    @DisplayName("Pre-matching filter context injection has no errors")
+    void testPreMatchingFilterNoContextErrors() {
+        FilterOrderTracker.clear();
+
+        var response = client.get("/filter/test")
+                .header(HeaderNames.create("X-Test-PreMatching-Context"), "true")
+                .request();
+
+        assertThat(response.status().code(), is(200));
+
+        var requestFilters = FilterOrderTracker.getRequestFilterOrder();
+
+        // No ERROR entries should exist
+        assertThat("No context access errors should occur", requestFilters,
+                not(hasItem(containsString("ERROR"))));
+
+        // No NULL_PROXY entries (proxies should be injected)
+        assertThat("Context proxies should be injected", requestFilters,
+                not(hasItem(containsString("NULL_PROXY"))));
     }
 }

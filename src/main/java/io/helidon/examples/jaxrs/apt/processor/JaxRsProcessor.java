@@ -52,6 +52,7 @@ public class JaxRsProcessor extends AbstractProcessor {
     private static final TypeName READER_CONTEXT = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.HelidonReaderInterceptorContext");
     private static final TypeName WRITER_CONTEXT = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.HelidonWriterInterceptorContext");
     private static final TypeName PRE_MATCHING_FILTER = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.JaxRsPreMatchingFilter");
+    private static final TypeName CONTEXT_FILTER = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.JaxRsContextFilter");
     private static final TypeName RESOURCE_INFO = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.HelidonResourceInfo");
 
     private static final int DEFAULT_PRIORITY = 5000;
@@ -330,14 +331,25 @@ public class JaxRsProcessor extends AbstractProcessor {
 
     private void addFilterRegistrations(io.helidon.codegen.classmodel.Constructor.Builder ctor,
                                         List<FilterInfo> filters, String methodName) {
+        int filterIndex = 0;
         for (FilterInfo filter : filters) {
             TypeName filterType = TypeName.create(filter.typeElement.getQualifiedName().toString());
+            // Use method name as prefix to ensure unique variable names across filter types
+            String varName = "_" + methodName + filterIndex++;
+
+            // Create filter instance and inject @Context proxies
+            ctor.addContent("var ").addContent(varName).addContent(" = new ")
+                    .addContent(filterType).addContentLine("();");
+            ctor.addContent(FILTER_CONTEXT).addContent(".injectContextProxies(")
+                    .addContent(varName).addContentLine(");");
+
+            // Register with filterContext
             if (filter.nameBindings.isEmpty()) {
-                ctor.addContent("this.filterContext.").addContent(methodName).addContent("(new ")
-                        .addContent(filterType).addContentLine("());");
+                ctor.addContent("this.filterContext.").addContent(methodName).addContent("(")
+                        .addContent(varName).addContentLine(");");
             } else {
-                ctor.addContent("this.filterContext.").addContent(methodName).addContent("(new ")
-                        .addContent(filterType).addContent("(), java.util.Set.of(")
+                ctor.addContent("this.filterContext.").addContent(methodName).addContent("(")
+                        .addContent(varName).addContent(", java.util.Set.of(")
                         .addContent(formatBindings(filter.nameBindings)).addContentLine("));");
             }
         }
@@ -491,19 +503,24 @@ public class JaxRsProcessor extends AbstractProcessor {
                         .addParameter("routing", "the Helidon HTTP routing builder")
                         .build());
 
+        // Register context propagation filter FIRST (enables Contexts.context() in handlers)
+        registerMethod.addContentLine("// Register context propagation filter (enables @Context injection in filters)");
+        registerMethod.addContent("routing.addFilter(").addContent(CONTEXT_FILTER).addContentLine(".INSTANCE);");
+        registerMethod.addContentLine("");
+
         // Register pre-matching filters as a Helidon Filter (runs BEFORE routing)
         if (!preMatchingRequestFilters.isEmpty()) {
             registerMethod.addContentLine("// Register pre-matching filters as Helidon Filter (runs before routing)");
-            registerMethod.addContent("java.util.List<jakarta.ws.rs.container.ContainerRequestFilter> _preMatchingFilters = java.util.List.of(");
-            boolean first = true;
+            registerMethod.addContentLine("java.util.List<jakarta.ws.rs.container.ContainerRequestFilter> _preMatchingFilters = new java.util.ArrayList<>();");
+            int preMatchingIndex = 0;
             for (FilterInfo filter : preMatchingRequestFilters) {
-                if (!first) {
-                    registerMethod.addContent(", ");
-                }
-                first = false;
-                registerMethod.addContent("new ").addContent(filter.typeElement.getQualifiedName().toString()).addContent("()");
+                String varName = "_preMatchFilter" + preMatchingIndex++;
+                registerMethod.addContent("var ").addContent(varName).addContent(" = new ")
+                        .addContent(filter.typeElement.getQualifiedName().toString()).addContentLine("();");
+                registerMethod.addContent(FILTER_CONTEXT).addContent(".injectContextProxies(")
+                        .addContent(varName).addContentLine(");");
+                registerMethod.addContent("_preMatchingFilters.add(").addContent(varName).addContentLine(");");
             }
-            registerMethod.addContentLine(");");
             registerMethod.addContent("routing.addFilter(new ").addContent(PRE_MATCHING_FILTER)
                     .addContentLine("(_preMatchingFilters));");
             registerMethod.addContentLine("");
@@ -621,6 +638,9 @@ public class JaxRsProcessor extends AbstractProcessor {
         // Create ResourceInfo for post-matching filters
         generateResourceInfo(handler, targetResourceClass, method);
 
+        // Register request-scoped objects in Helidon Context (enables @Context proxy injection)
+        generateContextRegistration(handler);
+
         // Create request context with ResourceInfo and method bindings before try block so they're accessible in catch blocks
         handler.addContent(REQUEST_CONTEXT).addContent(" requestContext = new ")
                 .addContent(REQUEST_CONTEXT).addContentLine("(req, _resourceInfo);");
@@ -692,18 +712,11 @@ public class JaxRsProcessor extends AbstractProcessor {
         handler.addContentLine(");");
     }
 
-    private void generatePreMatchingFilters(Method.Builder handler) {
-        handler.addContentLine("for (var filter : filterContext.getPreMatchingRequestFilters()) {");
-        handler.increaseContentPadding();
-        handler.addContentLine("filter.filter(requestContext);");
-        handler.addContentLine("if (requestContext.isAborted()) {");
-        handler.increaseContentPadding();
-        handler.addContentLine("sendAbortResponse(res, requestContext);");
-        handler.addContentLine("return;");
-        handler.decreaseContentPadding();
-        handler.addContentLine("}");
-        handler.decreaseContentPadding();
-        handler.addContentLine("}");
+    private void generateContextRegistration(Method.Builder handler) {
+        // Register ResourceInfo in Helidon Context (only available after route matching)
+        // Note: UriInfo, HttpHeaders, and SecurityContext are registered earlier
+        // in JaxRsContextFilter to make them available to pre-matching filters
+        handler.addContentLine("req.context().register(jakarta.ws.rs.container.ResourceInfo.class, _resourceInfo);");
     }
 
     private void generateRequestFilters(Method.Builder handler) {
@@ -711,8 +724,7 @@ public class JaxRsProcessor extends AbstractProcessor {
         handler.increaseContentPadding();
         handler.addContentLine("if (filterEntry.matches(methodBindings)) {");
         handler.increaseContentPadding();
-        // Inject ResourceInfo into filter for @Context ResourceInfo fields
-        handler.addContent(FILTER_CONTEXT).addContentLine(".injectResourceInfo(filterEntry.filter(), _resourceInfo);");
+        // Note: @Context proxies are injected at construction time via injectContextProxies()
         handler.addContentLine("filterEntry.filter().filter(requestContext);");
         handler.addContentLine("if (requestContext.isAborted()) {");
         handler.increaseContentPadding();
@@ -969,8 +981,7 @@ public class JaxRsProcessor extends AbstractProcessor {
         handler.increaseContentPadding();
         handler.addContentLine("if (entry.matches(methodBindings)) {");
         handler.increaseContentPadding();
-        // Inject ResourceInfo into filter for @Context ResourceInfo fields
-        handler.addContent(FILTER_CONTEXT).addContentLine(".injectResourceInfo(entry.filter(), _resourceInfo);");
+        // Note: @Context proxies are injected at construction time via injectContextProxies()
         handler.addContentLine("entry.filter().filter(requestContext, responseContext);");
         handler.decreaseContentPadding();
         handler.addContentLine("}");

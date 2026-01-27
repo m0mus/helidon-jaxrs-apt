@@ -6,7 +6,10 @@ import io.helidon.webserver.http.FilterChain;
 import io.helidon.webserver.http.RoutingRequest;
 import io.helidon.webserver.http.RoutingResponse;
 import jakarta.ws.rs.container.ContainerRequestFilter;
+import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.SecurityContext;
+import jakarta.ws.rs.core.UriInfo;
 
 import java.util.List;
 import java.util.Map;
@@ -46,6 +49,11 @@ public class JaxRsPreMatchingFilter implements Filter {
 
         // Create a mutable request context that tracks modifications
         PreMatchingRequestContext ctx = new PreMatchingRequestContext(req);
+
+        // Register request-scoped objects so @Context proxies resolve in pre-matching filters
+        req.context().register(UriInfo.class, ctx.getUriInfo());
+        req.context().register(HttpHeaders.class, new PreMatchingHttpHeaders(ctx));
+        req.context().register(SecurityContext.class, ctx.getSecurityContext());
 
         try {
             for (ContainerRequestFilter filter : filters) {

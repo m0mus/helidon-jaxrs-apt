@@ -4,27 +4,42 @@ import jakarta.ws.rs.container.ContainerRequestFilter;
 import jakarta.ws.rs.container.ContainerResponseFilter;
 import jakarta.ws.rs.container.ResourceInfo;
 import jakarta.ws.rs.core.Context;
-import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.HttpHeaders;
+import jakarta.ws.rs.core.SecurityContext;
+import jakarta.ws.rs.core.UriInfo;
 import jakarta.ws.rs.ext.ExceptionMapper;
 import jakarta.ws.rs.ext.ReaderInterceptor;
 import jakarta.ws.rs.ext.WriterInterceptor;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.Map;
 
 /**
  * Manages filters, interceptors, and exception mappers with support for name bindings.
  */
 public class FilterContext {
 
-    // Cache of @Context ResourceInfo fields per filter class
-    // Stores Field objects or NO_FIELD sentinel when no field exists
-    private static final Map<Class<?>, Object> resourceInfoFieldCache = new ConcurrentHashMap<>();
+    // Cache of @Context fields per filter class, keyed by (filterClass, contextType)
+    private static final Map<FieldCacheKey, Object> contextFieldCache = new ConcurrentHashMap<>();
     private static final Object NO_FIELD = new Object(); // Sentinel for "no field found"
+
+    // Map of context types to their proxy instances
+    private static final Map<Class<?>, Object> CONTEXT_PROXIES = new HashMap<>();
+
+    static {
+        CONTEXT_PROXIES.put(UriInfo.class, UriInfoProxy.INSTANCE);
+        CONTEXT_PROXIES.put(HttpHeaders.class, HttpHeadersProxy.INSTANCE);
+        CONTEXT_PROXIES.put(SecurityContext.class, SecurityContextProxy.INSTANCE);
+        CONTEXT_PROXIES.put(ResourceInfo.class, ResourceInfoProxy.INSTANCE);
+    }
+
+    // Cache key for field lookups
+    private record FieldCacheKey(Class<?> filterClass, Class<?> contextType) {}
 
     private final List<ContainerRequestFilter> preMatchingRequestFilters = new ArrayList<>();
     private final List<FilterEntry<ContainerRequestFilter>> requestFilters = new ArrayList<>();
@@ -195,48 +210,88 @@ public class FilterContext {
     public record ExceptionMapperEntry<T extends Throwable>(ExceptionMapper<T> mapper, Class<T> exceptionType) {}
 
     /**
-     * Inject ResourceInfo into a filter's @Context ResourceInfo field.
-     * This allows filters to access information about the matched resource method.
+     * Inject all supported @Context proxies into a filter instance.
+     * This should be called once at filter construction time.
+     *
+     * <p>Supported context types:
+     * <ul>
+     *   <li>{@link UriInfo} - Request URI information</li>
+     *   <li>{@link HttpHeaders} - Request headers</li>
+     *   <li>{@link SecurityContext} - Security context</li>
+     *   <li>{@link ResourceInfo} - Matched resource class and method</li>
+     * </ul>
+     *
+     * @param filter the filter instance to inject into
+     */
+    public static void injectContextProxies(Object filter) {
+        if (filter == null) {
+            return;
+        }
+
+        for (Map.Entry<Class<?>, Object> entry : CONTEXT_PROXIES.entrySet()) {
+            injectContextProxy(filter, entry.getKey(), entry.getValue());
+        }
+    }
+
+    /**
+     * Inject a specific @Context proxy into a filter instance.
      *
      * @param filter the filter instance
-     * @param resourceInfo the ResourceInfo to inject
+     * @param contextType the context interface type (e.g., UriInfo.class)
+     * @param proxy the proxy instance to inject
      */
-    public static void injectResourceInfo(Object filter, ResourceInfo resourceInfo) {
-        if (filter == null || resourceInfo == null) {
+    public static void injectContextProxy(Object filter, Class<?> contextType, Object proxy) {
+        if (filter == null || proxy == null) {
             return;
         }
 
         Class<?> filterClass = filter.getClass();
+        FieldCacheKey cacheKey = new FieldCacheKey(filterClass, contextType);
 
         // Check cache first
-        Object cached = resourceInfoFieldCache.get(filterClass);
+        Object cached = contextFieldCache.get(cacheKey);
         if (cached == NO_FIELD) {
             return; // Already determined no field exists
         }
 
-        Field field = (cached instanceof Field) ? (Field) cached : findResourceInfoField(filterClass);
+        Field field = (cached instanceof Field) ? (Field) cached : findContextField(filterClass, contextType, cacheKey);
 
         if (field != null) {
             try {
-                field.set(filter, resourceInfo);
+                field.set(filter, proxy);
             } catch (IllegalAccessException e) {
                 // Log but don't fail - injection is best-effort
-                System.err.println("Warning: Cannot inject ResourceInfo into " + filterClass.getName() + ": " + e.getMessage());
+                System.err.println("Warning: Cannot inject " + contextType.getSimpleName() +
+                        " into " + filterClass.getName() + ": " + e.getMessage());
             }
         }
     }
 
     /**
-     * Find the @Context ResourceInfo field in a filter class.
+     * Inject ResourceInfo into a filter's @Context ResourceInfo field.
+     * This allows filters to access information about the matched resource method.
+     *
+     * @param filter the filter instance
+     * @param resourceInfo the ResourceInfo to inject
+     * @deprecated Use {@link #injectContextProxies(Object)} at construction time instead.
+     *             This method is kept for backward compatibility but will be removed.
      */
-    private static Field findResourceInfoField(Class<?> filterClass) {
+    @Deprecated
+    public static void injectResourceInfo(Object filter, ResourceInfo resourceInfo) {
+        injectContextProxy(filter, ResourceInfo.class, resourceInfo);
+    }
+
+    /**
+     * Find a @Context field of the specified type in a filter class.
+     */
+    private static Field findContextField(Class<?> filterClass, Class<?> contextType, FieldCacheKey cacheKey) {
         // Search class hierarchy
         Class<?> current = filterClass;
         while (current != null && current != Object.class) {
             for (Field field : current.getDeclaredFields()) {
-                if (field.isAnnotationPresent(Context.class) && ResourceInfo.class.isAssignableFrom(field.getType())) {
+                if (field.isAnnotationPresent(Context.class) && contextType.isAssignableFrom(field.getType())) {
                     field.setAccessible(true);
-                    resourceInfoFieldCache.put(filterClass, field);
+                    contextFieldCache.put(cacheKey, field);
                     return field;
                 }
             }
@@ -244,7 +299,7 @@ public class FilterContext {
         }
 
         // No field found - cache this fact using sentinel
-        resourceInfoFieldCache.put(filterClass, NO_FIELD);
+        contextFieldCache.put(cacheKey, NO_FIELD);
         return null;
     }
 
@@ -252,6 +307,6 @@ public class FilterContext {
      * Clear the field cache. Useful for testing.
      */
     public static void clearFieldCache() {
-        resourceInfoFieldCache.clear();
+        contextFieldCache.clear();
     }
 }

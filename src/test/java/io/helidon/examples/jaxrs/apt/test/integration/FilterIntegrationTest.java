@@ -45,14 +45,17 @@ class FilterIntegrationTest {
         // Pre-matching filter should be first (priority 50)
         assertThat(order.get(0), is("PreMatchingTestFilter"));
 
+        // Then PreMatchingContextFilter (priority 60)
+        assertThat(order.get(1), is("PreMatchingContextFilter:OK"));
+
         // Then Priority100Filter (priority 100)
-        assertThat(order.get(1), is("Priority100Filter"));
+        assertThat(order.get(2), is("Priority100Filter"));
 
         // Then OrderTrackingFilter (priority 200)
-        assertThat(order.get(2), is("OrderTrackingFilter"));
+        assertThat(order.get(3), is("OrderTrackingFilter"));
 
         // Then Priority300Filter (priority 300)
-        assertThat(order.get(3), is("Priority300Filter"));
+        assertThat(order.get(4), is("Priority300Filter"));
     }
 
     @Test
@@ -83,6 +86,17 @@ class FilterIntegrationTest {
         // PreMatchingTestFilter should always be first
         assertThat(order, hasItem("PreMatchingTestFilter"));
         assertThat(order.indexOf("PreMatchingTestFilter"), is(0));
+    }
+
+    @Test
+    @DisplayName("@PreMatching @Context injection provides non-null values")
+    void testPreMatchingContextInjection() {
+        client.get("/filter/prematching").requestEntity(String.class);
+
+        List<String> order = FilterOrderTracker.getRequestFilterOrder();
+
+        assertThat(order, hasItem("PreMatchingContextFilter:OK"));
+        assertThat(order, not(hasItem("PreMatchingContextFilter:NULL")));
     }
 
     @Test
