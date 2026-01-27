@@ -70,7 +70,7 @@ The following JAX-RS features are **not currently implemented**:
 | Feature | Status | Notes |
 |---------|--------|-------|
 | CDI (`@Inject`) | ❌ | Filters/resources instantiated with `new`, no DI container |
-| `@Context` in resources | ⚠️ Partial | Only method parameters, not field injection in resources |
+| `@Context` field injection in resources | ❌ | Use method parameters instead |
 | Custom context providers | ❌ | Only standard types (UriInfo, HttpHeaders, SecurityContext, ResourceInfo) |
 
 ### Async & Reactive

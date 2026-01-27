@@ -888,7 +888,7 @@ Test resources are processed by the same annotation processor during the test co
 | Category | Feature | Complexity | Notes |
 |----------|---------|------------|-------|
 | **DI** | CDI `@Inject` | High | Requires DI container integration |
-| | `@Context` field injection in resources | Medium | Currently only method params |
+| | `@Context` field injection in resources | Low | Method params work; field injection is syntactic sugar |
 | **Async** | `@Suspended AsyncResponse` | Medium | Virtual threads reduce need |
 | | SSE (`SseEventSink`) | Medium | Helidon has native SSE support |
 | **Providers** | `MessageBodyReader<T>` | Medium | Custom deserializers |
