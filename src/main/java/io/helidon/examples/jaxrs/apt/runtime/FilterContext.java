@@ -11,6 +11,8 @@ import jakarta.ws.rs.ext.ExceptionMapper;
 import jakarta.ws.rs.ext.ReaderInterceptor;
 import jakarta.ws.rs.ext.WriterInterceptor;
 
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -21,8 +23,18 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Manages filters, interceptors, and exception mappers with support for name bindings.
+ *
+ * <p>This class is responsible for:
+ * <ul>
+ *   <li>Storing and retrieving filters, interceptors, and exception mappers</li>
+ *   <li>Name binding matching for selective filter application</li>
+ *   <li>Injecting @Context proxies into filter instances</li>
+ *   <li>Finding the most specific exception mapper for a given exception</li>
+ * </ul>
  */
 public class FilterContext {
+
+    private static final Logger LOGGER = System.getLogger(FilterContext.class.getName());
 
     // Cache of @Context fields per filter class, keyed by (filterClass, contextType)
     private static final Map<FieldCacheKey, Object> contextFieldCache = new ConcurrentHashMap<>();
@@ -261,24 +273,10 @@ public class FilterContext {
                 field.set(filter, proxy);
             } catch (IllegalAccessException e) {
                 // Log but don't fail - injection is best-effort
-                System.err.println("Warning: Cannot inject " + contextType.getSimpleName() +
-                        " into " + filterClass.getName() + ": " + e.getMessage());
+                LOGGER.log(Level.WARNING, "Cannot inject {0} into {1}: {2}",
+                        contextType.getSimpleName(), filterClass.getName(), e.getMessage());
             }
         }
-    }
-
-    /**
-     * Inject ResourceInfo into a filter's @Context ResourceInfo field.
-     * This allows filters to access information about the matched resource method.
-     *
-     * @param filter the filter instance
-     * @param resourceInfo the ResourceInfo to inject
-     * @deprecated Use {@link #injectContextProxies(Object)} at construction time instead.
-     *             This method is kept for backward compatibility but will be removed.
-     */
-    @Deprecated
-    public static void injectResourceInfo(Object filter, ResourceInfo resourceInfo) {
-        injectContextProxy(filter, ResourceInfo.class, resourceInfo);
     }
 
     /**
