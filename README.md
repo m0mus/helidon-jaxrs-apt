@@ -58,6 +58,78 @@ Build-time JAX-RS annotation processing for Helidon WebServer. Generates optimiz
 - `ExceptionMapper<T>` - Custom exception to response mapping
 - Built-in handling for JAX-RS exceptions (NotFoundException, BadRequestException, etc.)
 
+### Sub-Resources
+- Sub-resource locator methods (methods returning resource objects)
+- Nested path resolution
+
+## Not Yet Supported (Future Work)
+
+The following JAX-RS features are **not currently implemented**:
+
+### Dependency Injection
+| Feature | Status | Notes |
+|---------|--------|-------|
+| CDI (`@Inject`) | ❌ | Filters/resources instantiated with `new`, no DI container |
+| `@Context` in resources | ⚠️ Partial | Only method parameters, not field injection in resources |
+| Custom context providers | ❌ | Only standard types (UriInfo, HttpHeaders, SecurityContext, ResourceInfo) |
+
+### Async & Reactive
+| Feature | Status | Notes |
+|---------|--------|-------|
+| `@Suspended AsyncResponse` | ❌ | Async request processing |
+| `CompletionStage<T>` return | ❌ | Reactive return types |
+| Server-Sent Events (SSE) | ❌ | `SseEventSink`, `@Produces(SERVER_SENT_EVENTS)` |
+
+### Content Handling
+| Feature | Status | Notes |
+|---------|--------|-------|
+| `MessageBodyReader<T>` | ❌ | Custom request body deserializers |
+| `MessageBodyWriter<T>` | ❌ | Custom response body serializers |
+| `@Multipart` | ❌ | Multipart form data uploads |
+| JAXB/XML | ❌ | Only JSON supported via Jackson |
+| `ParamConverter` | ❌ | Custom parameter type conversion |
+
+### Validation
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Bean Validation | ❌ | `@Valid`, `@NotNull`, `@Size`, etc. |
+| Validation exception mapping | ❌ | `ConstraintViolationException` handling |
+
+### Additional Context Types
+| Feature | Status | Notes |
+|---------|--------|-------|
+| `@Context Request` | ❌ | Precondition evaluation (ETags) |
+| `@Context Providers` | ❌ | Access to registered providers |
+| `@Context Application` | ❌ | Application configuration |
+| `@Context Configuration` | ❌ | JAX-RS configuration |
+
+### Other
+| Feature | Status | Notes |
+|---------|--------|-------|
+| JAX-RS Client API | ❌ | Out of scope (use Helidon WebClient) |
+| Hypermedia (`Link`, `@Link`) | ❌ | HATEOAS support |
+| `@Encoded` | ❌ | Disable automatic URL decoding |
+| `@Suspended` timeout | ❌ | Async timeout handling |
+| Dynamic feature registration | ❌ | Runtime provider registration |
+
+### Workarounds
+
+**For CDI/@Inject**: Pass dependencies through constructor or use a service locator pattern:
+```java
+@Path("/users")
+public class UserResource {
+    private final UserService userService;
+
+    public UserResource() {
+        this.userService = ServiceLocator.get(UserService.class);
+    }
+}
+```
+
+**For custom content types**: Use Helidon's media support directly in your handlers or pre-process in filters.
+
+**For async**: Use virtual threads (Helidon 4.x default) - blocking code runs efficiently without explicit async APIs.
+
 ## Quick Start
 
 ### 1. Write JAX-RS Resource

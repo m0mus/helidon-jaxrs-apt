@@ -833,3 +833,120 @@ class ParameterExtractionTest {
 ```
 
 Test resources are processed by the same annotation processor during the test compilation phase.
+
+## JAX-RS Specification Coverage
+
+### Implemented Features
+
+| Category | Feature | Status |
+|----------|---------|--------|
+| **HTTP Methods** | `@GET`, `@POST`, `@PUT`, `@DELETE`, `@PATCH`, `@HEAD`, `@OPTIONS` | ✅ |
+| **Paths** | `@Path` on class and methods | ✅ |
+| | Path parameters `{param}` | ✅ |
+| | Regex path parameters `{param: regex}` | ❌ |
+| **Parameters** | `@PathParam` | ✅ |
+| | `@QueryParam` | ✅ |
+| | `@HeaderParam` | ✅ |
+| | `@CookieParam` | ✅ |
+| | `@FormParam` | ✅ |
+| | `@MatrixParam` | ✅ |
+| | `@DefaultValue` | ✅ |
+| | `@BeanParam` | ✅ |
+| | `List<T>`, `Set<T>` collection params | ✅ |
+| | `@Encoded` | ❌ |
+| **Content** | `@Produces` | ✅ |
+| | `@Consumes` | ✅ |
+| | Accept header negotiation | ✅ |
+| | Content-Type validation | ✅ |
+| | Wildcard media types | ✅ |
+| **Return Types** | POJO → JSON | ✅ |
+| | `Response` | ✅ |
+| | `void` | ✅ |
+| | `CompletionStage<T>` | ❌ |
+| **Context** | `@Context UriInfo` | ✅ |
+| | `@Context HttpHeaders` | ✅ |
+| | `@Context SecurityContext` | ✅ |
+| | `@Context ResourceInfo` | ✅ |
+| | `@Context Request` | ❌ |
+| | `@Context Providers` | ❌ |
+| | `@Context Application` | ❌ |
+| **Filters** | `ContainerRequestFilter` | ✅ |
+| | `ContainerResponseFilter` | ✅ |
+| | `@PreMatching` | ✅ |
+| | `@Priority` | ✅ |
+| | `@NameBinding` | ✅ |
+| | `@Context` injection in filters | ✅ |
+| **Interceptors** | `ReaderInterceptor` | ✅ |
+| | `WriterInterceptor` | ✅ |
+| **Exceptions** | `ExceptionMapper<T>` | ✅ |
+| | Built-in JAX-RS exceptions | ✅ |
+| **Resources** | Sub-resource locators | ✅ |
+| | Sub-resource classes | ✅ |
+
+### Not Implemented (Future Work)
+
+| Category | Feature | Complexity | Notes |
+|----------|---------|------------|-------|
+| **DI** | CDI `@Inject` | High | Requires DI container integration |
+| | `@Context` field injection in resources | Medium | Currently only method params |
+| **Async** | `@Suspended AsyncResponse` | Medium | Virtual threads reduce need |
+| | SSE (`SseEventSink`) | Medium | Helidon has native SSE support |
+| **Providers** | `MessageBodyReader<T>` | Medium | Custom deserializers |
+| | `MessageBodyWriter<T>` | Medium | Custom serializers |
+| | `ParamConverter<T>` | Low | Custom param conversion |
+| | `ContextResolver<T>` | Low | Context providers |
+| **Content** | Multipart (`@FormDataParam`) | Medium | File uploads |
+| | JAXB/XML support | Low | Add alongside JSON |
+| **Validation** | Bean Validation (`@Valid`) | Medium | Integration with Hibernate Validator |
+| **Other** | `@Encoded` | Low | Disable URL decoding |
+| | Regex path params | Low | `{id: [0-9]+}` |
+| | Hypermedia/HATEOAS | Low | `Link` headers |
+
+### Design Decisions
+
+#### Why No CDI Support?
+
+1. **Simplicity**: This project focuses on compile-time code generation without runtime DI overhead
+2. **GraalVM**: Avoiding reflection-based DI improves native image compatibility
+3. **Helidon Integration**: Helidon 4.x uses its own injection framework; full CDI would require significant integration work
+
+**Workaround**: Use constructor injection with a service locator or factory pattern.
+
+#### Why Virtual Threads Instead of Async API?
+
+Helidon 4.x runs on virtual threads by default. This means:
+- Blocking code is efficient (no thread pool exhaustion)
+- Simpler programming model than `AsyncResponse`
+- Better stack traces for debugging
+
+`CompletionStage<T>` support could be added for compatibility, but isn't necessary for performance.
+
+#### Why Proxies for @Context in Filters?
+
+1. **Singleton Filters**: Filters are instantiated once, but `@Context` objects are request-scoped
+2. **Virtual Threads**: `ThreadLocal` has overhead with virtual threads
+3. **Helidon Context**: Using `Contexts.context()` integrates with Helidon's existing infrastructure
+
+### Comparison with Helidon MP (Jersey)
+
+| Aspect | This Project (APT) | Helidon MP (Jersey) |
+|--------|-------------------|---------------------|
+| Code Generation | Compile-time | Runtime |
+| Reflection | None | Heavy |
+| Native Image | Excellent | Requires configuration |
+| Startup Time | Fast | Slower |
+| JAX-RS Coverage | Partial (see above) | Full |
+| CDI Support | No | Yes |
+| Footprint | Smaller | Larger |
+
+**Use This Project When**:
+- Building microservices with specific JAX-RS subset
+- Targeting GraalVM native image
+- Prioritizing startup time and footprint
+- Don't need CDI or advanced JAX-RS features
+
+**Use Helidon MP When**:
+- Need full JAX-RS specification compliance
+- Require CDI dependency injection
+- Using MicroProfile specifications
+- Migrating existing JAX-RS applications
