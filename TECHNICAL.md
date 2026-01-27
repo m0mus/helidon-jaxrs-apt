@@ -367,6 +367,266 @@ The processor generates a comprehensive exception handling chain:
 }
 ```
 
+## Filter Architecture
+
+This section explains how JAX-RS filters are implemented, addressing key design challenges around filter timing, field injection, and registration.
+
+### Design Challenges and Solutions
+
+#### Challenge 1: Filters Need Access to Resource Method (ResourceInfo)
+
+**Problem**: JAX-RS filters may need to access the matched resource method to analyze its annotations (e.g., for authorization checks). However, Helidon filters execute before routing, so the matched method is not yet known.
+
+**Solution**: Two types of filters with different capabilities:
+
+| Filter Type | When it Runs | Has ResourceInfo? | Use Case |
+|------------|--------------|-------------------|----------|
+| **Pre-matching** (`@PreMatching`) | Before routing | ❌ No | URI rewriting, method override, early abort |
+| **Post-matching** (default) | After routing, before handler | ✅ Yes | Authorization, logging, auditing |
+
+Post-matching filters have access to `@Context ResourceInfo` which provides:
+- `getResourceClass()` - The matched resource class
+- `getResourceMethod()` - The matched method (with annotations)
+
+```java
+@Provider
+@Priority(100)
+public class AuthorizationFilter implements ContainerRequestFilter {
+    @Context
+    private ResourceInfo resourceInfo;
+
+    @Override
+    public void filter(ContainerRequestContext ctx) throws IOException {
+        Method method = resourceInfo.getResourceMethod();
+        if (method.isAnnotationPresent(RolesAllowed.class)) {
+            // Check authorization based on method annotations
+        }
+    }
+}
+```
+
+#### Challenge 2: Request-Scoped Field Injection in Singleton Filters
+
+**Problem**: Filters are instantiated once at startup (singletons), but `@Context` fields like `UriInfo`, `HttpHeaders`, and `SecurityContext` are request-scoped. Traditional approaches using `ThreadLocal` don't work well with virtual threads.
+
+**Solution**: Proxy pattern using Helidon's Context mechanism (virtual-thread safe):
+
+1. **At filter construction time**: Inject proxy objects (e.g., `UriInfoProxy`) into `@Context` fields
+2. **At request time**: Register actual request-scoped objects in Helidon's Context
+3. **When proxy methods are called**: Delegate to the actual object via `Contexts.context()`
+
+```
+Request Flow:
+┌─────────────────────────────────────────────────────────────────────┐
+│ 1. JaxRsContextFilter                                               │
+│    - Registers UriInfo, HttpHeaders, SecurityContext in Context     │
+│    - Wraps chain with Contexts.runInContext(req.context(), ...)     │
+├─────────────────────────────────────────────────────────────────────┤
+│ 2. Pre-matching Filters (if any)                                    │
+│    - Can access: UriInfo, HttpHeaders, SecurityContext              │
+│    - Cannot access: ResourceInfo (not yet routed)                   │
+├─────────────────────────────────────────────────────────────────────┤
+│ 3. Helidon Routing (route matching)                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│ 4. Handler registers ResourceInfo in Context                        │
+├─────────────────────────────────────────────────────────────────────┤
+│ 5. Post-matching Request Filters                                    │
+│    - Can access: All @Context types including ResourceInfo          │
+├─────────────────────────────────────────────────────────────────────┤
+│ 6. Handler executes resource method                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│ 7. Response Filters                                                 │
+│    - Can access: All @Context types                                 │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Proxy Implementation Example**:
+
+```java
+public class UriInfoProxy implements UriInfo {
+    public static final UriInfoProxy INSTANCE = new UriInfoProxy();
+
+    private UriInfo delegate() {
+        return Contexts.context()
+                .flatMap(ctx -> ctx.get(UriInfo.class, UriInfo.class))
+                .orElseThrow(() -> new IllegalStateException(
+                        "UriInfo not available - ensure JaxRsContextFilter is registered"));
+    }
+
+    @Override
+    public String getPath() {
+        return delegate().getPath();  // Delegates to request-scoped UriInfo
+    }
+    // ... other methods delegate similarly
+}
+```
+
+**Supported @Context Types in Filters**:
+
+| Context Type | Pre-matching Filter | Post-matching Filter |
+|--------------|---------------------|---------------------|
+| `UriInfo` | ✅ | ✅ |
+| `HttpHeaders` | ✅ | ✅ |
+| `SecurityContext` | ✅ | ✅ |
+| `ResourceInfo` | ❌ (throws) | ✅ |
+
+#### Challenge 3: Filter Registration
+
+**Problem**: How are filters discovered and registered?
+
+**Solution**: APT-based discovery with `@Provider` annotation:
+
+1. **Discovery**: At compile time, `JaxRsProcessor` scans for `@Provider` classes
+2. **Classification**: Filters are classified by type and sorted by `@Priority`
+3. **Code Generation**: Registration code is generated in the routing class
+
+```java
+// Generated code in register() method:
+
+// 1. Context propagation filter (enables @Context injection)
+routing.addFilter(JaxRsContextFilter.INSTANCE);
+
+// 2. Pre-matching filters (as Helidon Filter, runs before routing)
+var _preMatchFilter0 = new UriRewritingFilter();
+FilterContext.injectContextProxies(_preMatchFilter0);
+_preMatchingFilters.add(_preMatchFilter0);
+routing.addFilter(new JaxRsPreMatchingFilter(_preMatchingFilters, this.filterContext));
+
+// 3. Post-matching filters (registered in FilterContext, called from handlers)
+var _addRequestFilter0 = new AuthFilter();
+FilterContext.injectContextProxies(_addRequestFilter0);
+this.filterContext.addRequestFilter(_addRequestFilter0);
+```
+
+### Pre-matching vs Post-matching Filters
+
+#### Pre-matching Filters (`@PreMatching`)
+
+Execute BEFORE Helidon's routing, can modify which route is matched:
+
+```java
+@Provider
+@PreMatching
+@Priority(100)
+public class UriRewritingFilter implements ContainerRequestFilter {
+    @Context
+    private UriInfo uriInfo;  // ✅ Available
+
+    @Override
+    public void filter(ContainerRequestContext ctx) throws IOException {
+        // Rewrite legacy URLs to new paths
+        if (ctx.getUriInfo().getPath().startsWith("/legacy/")) {
+            ctx.setRequestUri(URI.create("/api/v2/..."));
+        }
+    }
+}
+```
+
+**Capabilities**:
+- Modify request URI (affects routing)
+- Override HTTP method (e.g., POST → PUT via header)
+- Abort request before routing
+- Access `@Context UriInfo`, `HttpHeaders`, `SecurityContext`
+
+**Limitations**:
+- Cannot access `@Context ResourceInfo` (route not yet matched)
+- Cannot use `@NameBinding` (no method to bind to yet)
+
+#### Post-matching Filters (default)
+
+Execute AFTER routing, have full context:
+
+```java
+@Provider
+@Priority(100)
+public class AuditFilter implements ContainerRequestFilter {
+    @Context
+    private ResourceInfo resourceInfo;  // ✅ Available
+
+    @Override
+    public void filter(ContainerRequestContext ctx) throws IOException {
+        Method method = resourceInfo.getResourceMethod();
+        Class<?> resource = resourceInfo.getResourceClass();
+        // Log: "Calling UserResource.getUser()"
+    }
+}
+```
+
+**Capabilities**:
+- Access all `@Context` types including `ResourceInfo`
+- Use `@NameBinding` for selective application
+- Full request/response modification
+
+### Name Binding
+
+Selectively apply filters to specific methods:
+
+```java
+// 1. Define binding annotation
+@NameBinding
+@Target({ElementType.TYPE, ElementType.METHOD})
+@Retention(RetentionPolicy.RUNTIME)
+public @interface Authenticated {}
+
+// 2. Apply to filter
+@Provider
+@Authenticated
+public class AuthFilter implements ContainerRequestFilter { ... }
+
+// 3. Apply to methods that need authentication
+@Path("/api")
+public class ApiResource {
+    @GET
+    @Path("/public")
+    public String publicData() { ... }  // No AuthFilter
+
+    @GET
+    @Path("/private")
+    @Authenticated
+    public String privateData() { ... }  // AuthFilter applied
+}
+```
+
+### Filter Priority
+
+Lower priority value = executes earlier for request filters, later for response filters:
+
+```
+Request flow:  Priority 100 → Priority 200 → Priority 300 → Handler
+Response flow: Handler → Priority 300 → Priority 200 → Priority 100
+```
+
+```java
+@Provider
+@Priority(100)  // Runs first for requests
+public class EarlyFilter implements ContainerRequestFilter { ... }
+
+@Provider
+@Priority(200)  // Runs second for requests
+public class LaterFilter implements ContainerRequestFilter { ... }
+```
+
+### Implementation Classes
+
+| Class | Purpose |
+|-------|---------|
+| `JaxRsContextFilter` | Helidon Filter that sets up context propagation and registers request-scoped objects |
+| `JaxRsPreMatchingFilter` | Helidon Filter wrapper for JAX-RS pre-matching filters |
+| `FilterContext` | Registry for filters, interceptors, exception mappers; handles @Context injection |
+| `UriInfoProxy` | Proxy for request-scoped UriInfo delegation |
+| `HttpHeadersProxy` | Proxy for request-scoped HttpHeaders delegation |
+| `SecurityContextProxy` | Proxy for request-scoped SecurityContext delegation |
+| `ResourceInfoProxy` | Proxy for request-scoped ResourceInfo delegation |
+| `HelidonResourceInfo` | Adapter implementing ResourceInfo for matched resource |
+
+### Limitations
+
+1. **CDI not supported**: Filters are instantiated with `new`, not through dependency injection. Only `@Context` fields are injected (via proxies).
+
+2. **ResourceInfo in pre-matching**: Pre-matching filters cannot access `ResourceInfo` because route matching hasn't occurred yet. This is by design and matches JAX-RS specification.
+
+3. **Custom @Context types**: Only the standard JAX-RS context types are supported (`UriInfo`, `HttpHeaders`, `SecurityContext`, `ResourceInfo`).
+
 ## Filter Context
 
 The `FilterContext` class manages all providers:

@@ -43,6 +43,7 @@ Build-time JAX-RS annotation processing for Helidon WebServer. Generates optimiz
 - `@Context UriInfo` - URI information
 - `@Context HttpHeaders` - HTTP headers
 - `@Context SecurityContext` - Authentication and authorization info
+- `@Context ResourceInfo` - Matched resource class and method (post-matching filters only)
 
 ### Filters and Interceptors
 - `ContainerRequestFilter` - Pre-processing filter
@@ -277,6 +278,64 @@ public class ApiResource {
 }
 ```
 
+### Pre-Matching Filters
+
+Pre-matching filters run BEFORE routing, allowing URI rewriting and method override:
+
+```java
+@Provider
+@PreMatching
+@Priority(100)
+public class UriRewritingFilter implements ContainerRequestFilter {
+    @Context
+    private UriInfo uriInfo;  // Available in pre-matching
+
+    @Override
+    public void filter(ContainerRequestContext ctx) throws IOException {
+        // Rewrite legacy URLs
+        if (uriInfo.getPath().startsWith("/legacy/")) {
+            ctx.setRequestUri(URI.create("/api/v2/new-path"));
+        }
+    }
+}
+
+@Provider
+@PreMatching
+@Priority(200)
+public class MethodOverrideFilter implements ContainerRequestFilter {
+    @Override
+    public void filter(ContainerRequestContext ctx) throws IOException {
+        // Support X-HTTP-Method-Override header
+        String override = ctx.getHeaderString("X-HTTP-Method-Override");
+        if (override != null) {
+            ctx.setMethod(override);  // POST → PUT/DELETE
+        }
+    }
+}
+```
+
+### Post-Matching Filters with ResourceInfo
+
+Post-matching filters have access to the matched resource method:
+
+```java
+@Provider
+@Priority(100)
+public class AuthorizationFilter implements ContainerRequestFilter {
+    @Context
+    private ResourceInfo resourceInfo;  // Only in post-matching filters
+
+    @Override
+    public void filter(ContainerRequestContext ctx) throws IOException {
+        Method method = resourceInfo.getResourceMethod();
+        RolesAllowed roles = method.getAnnotation(RolesAllowed.class);
+        if (roles != null) {
+            // Check authorization based on method annotations
+        }
+    }
+}
+```
+
 ### Reader/Writer Interceptors
 
 ```java
@@ -346,14 +405,22 @@ src/main/java/io/helidon/examples/jaxrs/apt/
 │   └── JaxRsProcessor.java   # Annotation processor
 └── runtime/
     ├── Generated.java                       # Marker annotation
-    ├── FilterContext.java                   # Filter/interceptor/mapper registry
+    ├── FilterContext.java                   # Filter/interceptor/mapper registry + @Context injection
     ├── SimpleRuntimeDelegate.java           # JAX-RS RuntimeDelegate impl
-    ├── HelidonUriInfo.java                  # UriInfo implementation
-    ├── HelidonHttpHeaders.java              # HttpHeaders implementation
+    ├── HelidonUriInfo.java                  # UriInfo adapter for Helidon request
+    ├── HelidonHttpHeaders.java              # HttpHeaders adapter
+    ├── HelidonSecurityContext.java          # SecurityContext adapter
+    ├── HelidonResourceInfo.java             # ResourceInfo for matched method
     ├── HelidonContainerRequestContext.java  # Request filter context
     ├── HelidonContainerResponseContext.java # Response filter context
     ├── HelidonReaderInterceptorContext.java # Reader interceptor context
-    └── HelidonWriterInterceptorContext.java # Writer interceptor context
+    ├── HelidonWriterInterceptorContext.java # Writer interceptor context
+    ├── JaxRsContextFilter.java              # Sets up context propagation
+    ├── JaxRsPreMatchingFilter.java          # Helidon Filter for pre-matching
+    ├── UriInfoProxy.java                    # Request-scoped proxy for filters
+    ├── HttpHeadersProxy.java                # Request-scoped proxy for filters
+    ├── SecurityContextProxy.java            # Request-scoped proxy for filters
+    └── ResourceInfoProxy.java               # Request-scoped proxy for filters
 ```
 
 ## Testing
@@ -368,15 +435,19 @@ Run integration tests only:
 mvn test -Pintegration-tests
 ```
 
-The project includes 151 tests covering:
+The project includes 193 tests covering:
 - Parameter extraction (path, query, header, cookie, form, matrix, bean)
 - Collection parameters (List/Set)
 - Content negotiation (@Consumes, @Produces, Accept header validation)
-- Context injection (UriInfo, HttpHeaders, SecurityContext)
+- Context injection (UriInfo, HttpHeaders, SecurityContext, ResourceInfo)
 - Response return types
 - Filter ordering and execution
+- Pre-matching filters (URI rewriting, method override, early abort)
+- Post-matching filters with ResourceInfo access
+- @Context proxy injection in filters
 - Interceptor chains
 - Exception mappers
+- Sub-resource locators
 - CRUD operations
 
 ## Requirements
