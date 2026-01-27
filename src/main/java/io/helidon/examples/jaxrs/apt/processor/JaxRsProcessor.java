@@ -52,6 +52,7 @@ public class JaxRsProcessor extends AbstractProcessor {
     private static final TypeName READER_CONTEXT = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.HelidonReaderInterceptorContext");
     private static final TypeName WRITER_CONTEXT = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.HelidonWriterInterceptorContext");
     private static final TypeName PRE_MATCHING_FILTER = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.JaxRsPreMatchingFilter");
+    private static final TypeName RESOURCE_INFO = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.HelidonResourceInfo");
 
     private static final int DEFAULT_PRIORITY = 5000;
 
@@ -577,6 +578,21 @@ public class JaxRsProcessor extends AbstractProcessor {
                 .addContentLine("}")
                 .addContentLine("return false;")
                 .build());
+
+        // Helper method to copy headers from response context to Helidon response
+        classBuilder.addMethod(Method.builder()
+                .name("copyResponseHeaders")
+                .accessModifier(AccessModifier.PRIVATE)
+                .addParameter(p -> p.name("res").type(SERVER_RESPONSE))
+                .addParameter(p -> p.name("responseContext").type(RESPONSE_CONTEXT))
+                .addContentLine("for (var entry : responseContext.getHeaders().entrySet()) {")
+                .addContentLine("    for (var value : entry.getValue()) {")
+                .addContentLine("        if (value != null) {")
+                .addContentLine("            res.header(io.helidon.http.HeaderNames.create(entry.getKey()), value.toString());")
+                .addContentLine("        }")
+                .addContentLine("    }")
+                .addContentLine("}")
+                .build());
     }
 
     private Method generateHandler(RouteInfo route, TypeElement resourceClass) {
@@ -584,10 +600,13 @@ public class JaxRsProcessor extends AbstractProcessor {
         String methodName = method.getSimpleName().toString();
 
         String javadocRef;
+        TypeElement targetResourceClass;
         if (route.isSubResource()) {
             javadocRef = route.subResource.subResourceType.getSimpleName() + "#" + methodName;
+            targetResourceClass = route.subResource.subResourceType;
         } else {
             javadocRef = resourceClass.getSimpleName() + "#" + methodName;
+            targetResourceClass = resourceClass;
         }
 
         Method.Builder handler = Method.builder()
@@ -599,9 +618,12 @@ public class JaxRsProcessor extends AbstractProcessor {
                         .addLine("Handler for {@link " + javadocRef + "}.")
                         .build());
 
-        // Create request context and method bindings before try block so they're accessible in catch blocks
+        // Create ResourceInfo for post-matching filters
+        generateResourceInfo(handler, targetResourceClass, method);
+
+        // Create request context with ResourceInfo and method bindings before try block so they're accessible in catch blocks
         handler.addContent(REQUEST_CONTEXT).addContent(" requestContext = new ")
-                .addContent(REQUEST_CONTEXT).addContentLine("(req);");
+                .addContent(REQUEST_CONTEXT).addContentLine("(req, _resourceInfo);");
         generateMethodBindings(handler, route.nameBindings);
 
         handler.addContentLine("try {");
@@ -647,6 +669,29 @@ public class JaxRsProcessor extends AbstractProcessor {
         }
     }
 
+    private void generateResourceInfo(Method.Builder handler, TypeElement resourceClass, ExecutableElement method) {
+        TypeName resourceTypeName = TypeName.create(resourceClass.getQualifiedName().toString());
+
+        // Generate: HelidonResourceInfo _resourceInfo = HelidonResourceInfo.create(ResourceClass.class, "methodName", ParamType1.class, ...);
+        handler.addContent(RESOURCE_INFO).addContent(" _resourceInfo = ").addContent(RESOURCE_INFO)
+                .addContent(".create(").addContent(resourceTypeName).addContent(".class, \"")
+                .addContent(method.getSimpleName().toString()).addContent("\"");
+
+        // Add parameter types for method lookup
+        for (VariableElement param : method.getParameters()) {
+            handler.addContent(", ");
+            String paramType = param.asType().toString();
+            // Handle generic types by using raw type
+            int genericStart = paramType.indexOf('<');
+            if (genericStart > 0) {
+                paramType = paramType.substring(0, genericStart);
+            }
+            handler.addContent(paramType).addContent(".class");
+        }
+
+        handler.addContentLine(");");
+    }
+
     private void generatePreMatchingFilters(Method.Builder handler) {
         handler.addContentLine("for (var filter : filterContext.getPreMatchingRequestFilters()) {");
         handler.increaseContentPadding();
@@ -666,6 +711,8 @@ public class JaxRsProcessor extends AbstractProcessor {
         handler.increaseContentPadding();
         handler.addContentLine("if (filterEntry.matches(methodBindings)) {");
         handler.increaseContentPadding();
+        // Inject ResourceInfo into filter for @Context ResourceInfo fields
+        handler.addContent(FILTER_CONTEXT).addContentLine(".injectResourceInfo(filterEntry.filter(), _resourceInfo);");
         handler.addContentLine("filterEntry.filter().filter(requestContext);");
         handler.addContentLine("if (requestContext.isAborted()) {");
         handler.increaseContentPadding();
@@ -830,6 +877,7 @@ public class JaxRsProcessor extends AbstractProcessor {
             handler.addContent(RESPONSE_CONTEXT).addContent(" responseContext = new ")
                     .addContent(RESPONSE_CONTEXT).addContentLine("(204, null);");
             generateResponseFilters(handler);
+            handler.addContentLine("copyResponseHeaders(res, responseContext);");
             handler.addContentLine("res.status(responseContext.getStatus()).send();");
         } else if (returnType.toString().equals("jakarta.ws.rs.core.Response")) {
             // Handle Response return type
@@ -843,6 +891,9 @@ public class JaxRsProcessor extends AbstractProcessor {
             // JAX-RS order: Writer interceptors execute before response filters
             generateWriterInterceptors(handler, contentType);
             generateResponseFilters(handler);
+
+            // Copy headers added by response filters to the actual response
+            handler.addContentLine("copyResponseHeaders(res, responseContext);");
 
             // For text/plain with String return, use the raw result (not JSON-serialized)
             if (contentType.startsWith("text/") && "java.lang.String".equals(returnType.toString())) {
@@ -881,6 +932,7 @@ public class JaxRsProcessor extends AbstractProcessor {
         handler.addContentLine("if (_contentType.startsWith(\"text/plain\") && _entity instanceof String) {");
         handler.increaseContentPadding();
         generateResponseFilters(handler);
+        handler.addContentLine("copyResponseHeaders(res, responseContext);");
         handler.addContentLine("res.status(responseContext.getStatus()).header(\"Content-Type\", _contentType).send((String) _entity);");
         handler.decreaseContentPadding();
         handler.addContentLine("} else {");
@@ -896,6 +948,7 @@ public class JaxRsProcessor extends AbstractProcessor {
         handler.addContentLine("String _output = writerCtx.getResult();");
 
         generateResponseFilters(handler);
+        handler.addContentLine("copyResponseHeaders(res, responseContext);");
 
         handler.addContentLine("res.status(responseContext.getStatus()).header(\"Content-Type\", _contentType).send(_output);");
         handler.decreaseContentPadding();
@@ -905,6 +958,7 @@ public class JaxRsProcessor extends AbstractProcessor {
         handler.addContentLine("} else {");
         handler.increaseContentPadding();
         generateResponseFilters(handler);
+        handler.addContentLine("copyResponseHeaders(res, responseContext);");
         handler.addContentLine("res.status(responseContext.getStatus()).send();");
         handler.decreaseContentPadding();
         handler.addContentLine("}");
@@ -915,6 +969,8 @@ public class JaxRsProcessor extends AbstractProcessor {
         handler.increaseContentPadding();
         handler.addContentLine("if (entry.matches(methodBindings)) {");
         handler.increaseContentPadding();
+        // Inject ResourceInfo into filter for @Context ResourceInfo fields
+        handler.addContent(FILTER_CONTEXT).addContentLine(".injectResourceInfo(entry.filter(), _resourceInfo);");
         handler.addContentLine("entry.filter().filter(requestContext, responseContext);");
         handler.decreaseContentPadding();
         handler.addContentLine("}");
@@ -964,11 +1020,14 @@ public class JaxRsProcessor extends AbstractProcessor {
         generateResponseFilters(handler);
         handler.decreaseContentPadding();
         handler.addContentLine("} catch (java.io.IOException ioEx) { /* suppressed */ }");
+        // Copy headers from exception mapper response
         handler.addContentLine("for (var _hdr : _mapperResponse.getStringHeaders().entrySet()) {");
         handler.addContentLine("    for (var _val : _hdr.getValue()) {");
         handler.addContentLine("        res.header(io.helidon.http.HeaderNames.create(_hdr.getKey()), _val);");
         handler.addContentLine("    }");
         handler.addContentLine("}");
+        // Copy headers added by response filters
+        handler.addContentLine("copyResponseHeaders(res, responseContext);");
         handler.addContentLine("if (_entity != null) {");
         handler.addContentLine("    if (_entity instanceof String) {");
         handler.addContentLine("        res.status(_status).send((String) _entity);");
@@ -1087,6 +1146,7 @@ public class JaxRsProcessor extends AbstractProcessor {
         handler.addContentLine("} catch (java.io.IOException ioEx) {");
         handler.addContentLine("    // Response filter IOException is suppressed in error handling");
         handler.addContentLine("}");
+        handler.addContentLine("copyResponseHeaders(res, responseContext);");
         handler.addContentLine("res.status(responseContext.getStatus()).send(_errMsg);");
     }
 

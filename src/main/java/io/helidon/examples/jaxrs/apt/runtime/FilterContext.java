@@ -2,19 +2,29 @@ package io.helidon.examples.jaxrs.apt.runtime;
 
 import jakarta.ws.rs.container.ContainerRequestFilter;
 import jakarta.ws.rs.container.ContainerResponseFilter;
+import jakarta.ws.rs.container.ResourceInfo;
+import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.ExceptionMapper;
 import jakarta.ws.rs.ext.ReaderInterceptor;
 import jakarta.ws.rs.ext.WriterInterceptor;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Map;
 
 /**
  * Manages filters, interceptors, and exception mappers with support for name bindings.
  */
 public class FilterContext {
+
+    // Cache of @Context ResourceInfo fields per filter class
+    // Stores Field objects or NO_FIELD sentinel when no field exists
+    private static final Map<Class<?>, Object> resourceInfoFieldCache = new ConcurrentHashMap<>();
+    private static final Object NO_FIELD = new Object(); // Sentinel for "no field found"
 
     private final List<ContainerRequestFilter> preMatchingRequestFilters = new ArrayList<>();
     private final List<FilterEntry<ContainerRequestFilter>> requestFilters = new ArrayList<>();
@@ -183,4 +193,65 @@ public class FilterContext {
      * Entry for an exception mapper with its exception type.
      */
     public record ExceptionMapperEntry<T extends Throwable>(ExceptionMapper<T> mapper, Class<T> exceptionType) {}
+
+    /**
+     * Inject ResourceInfo into a filter's @Context ResourceInfo field.
+     * This allows filters to access information about the matched resource method.
+     *
+     * @param filter the filter instance
+     * @param resourceInfo the ResourceInfo to inject
+     */
+    public static void injectResourceInfo(Object filter, ResourceInfo resourceInfo) {
+        if (filter == null || resourceInfo == null) {
+            return;
+        }
+
+        Class<?> filterClass = filter.getClass();
+
+        // Check cache first
+        Object cached = resourceInfoFieldCache.get(filterClass);
+        if (cached == NO_FIELD) {
+            return; // Already determined no field exists
+        }
+
+        Field field = (cached instanceof Field) ? (Field) cached : findResourceInfoField(filterClass);
+
+        if (field != null) {
+            try {
+                field.set(filter, resourceInfo);
+            } catch (IllegalAccessException e) {
+                // Log but don't fail - injection is best-effort
+                System.err.println("Warning: Cannot inject ResourceInfo into " + filterClass.getName() + ": " + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Find the @Context ResourceInfo field in a filter class.
+     */
+    private static Field findResourceInfoField(Class<?> filterClass) {
+        // Search class hierarchy
+        Class<?> current = filterClass;
+        while (current != null && current != Object.class) {
+            for (Field field : current.getDeclaredFields()) {
+                if (field.isAnnotationPresent(Context.class) && ResourceInfo.class.isAssignableFrom(field.getType())) {
+                    field.setAccessible(true);
+                    resourceInfoFieldCache.put(filterClass, field);
+                    return field;
+                }
+            }
+            current = current.getSuperclass();
+        }
+
+        // No field found - cache this fact using sentinel
+        resourceInfoFieldCache.put(filterClass, NO_FIELD);
+        return null;
+    }
+
+    /**
+     * Clear the field cache. Useful for testing.
+     */
+    public static void clearFieldCache() {
+        resourceInfoFieldCache.clear();
+    }
 }

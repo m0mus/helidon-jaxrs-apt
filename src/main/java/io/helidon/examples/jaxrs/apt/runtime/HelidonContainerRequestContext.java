@@ -2,6 +2,7 @@ package io.helidon.examples.jaxrs.apt.runtime;
 
 import io.helidon.webserver.http.ServerRequest;
 import jakarta.ws.rs.container.ContainerRequestContext;
+import jakarta.ws.rs.container.ResourceInfo;
 import jakarta.ws.rs.core.*;
 
 import java.io.InputStream;
@@ -10,14 +11,21 @@ import java.util.*;
 
 /**
  * Wrapper that adapts Helidon's ServerRequest to JAX-RS ContainerRequestContext.
+ *
+ * <p>For post-matching filters, this context also provides access to {@link ResourceInfo}
+ * which contains information about the matched resource method.
  */
 public class HelidonContainerRequestContext implements ContainerRequestContext {
+
+    /** Property key for storing ResourceInfo in the context. */
+    public static final String RESOURCE_INFO_PROPERTY = "jakarta.ws.rs.container.ResourceInfo";
 
     private final ServerRequest request;
     private final HelidonUriInfo uriInfo;
     private final HelidonHttpHeaders httpHeaders;
     private final Map<String, Object> properties = new HashMap<>();
     private SecurityContext securityContext;
+    private ResourceInfo resourceInfo;
     private boolean aborted = false;
     private int abortStatus = 0;
     private String abortMessage;
@@ -26,6 +34,39 @@ public class HelidonContainerRequestContext implements ContainerRequestContext {
         this.request = request;
         this.uriInfo = new HelidonUriInfo(request);
         this.httpHeaders = new HelidonHttpHeaders(request);
+    }
+
+    /**
+     * Create a request context with ResourceInfo for post-matching filters.
+     *
+     * @param request the server request
+     * @param resourceInfo the matched resource info
+     */
+    public HelidonContainerRequestContext(ServerRequest request, ResourceInfo resourceInfo) {
+        this(request);
+        this.resourceInfo = resourceInfo;
+        // Also store in properties for filters that access it via getProperty()
+        this.properties.put(RESOURCE_INFO_PROPERTY, resourceInfo);
+    }
+
+    /**
+     * Get the ResourceInfo for the matched resource method.
+     * Only available for post-matching filters.
+     *
+     * @return the resource info, or null if not set
+     */
+    public ResourceInfo getResourceInfo() {
+        return resourceInfo;
+    }
+
+    /**
+     * Set the ResourceInfo for the matched resource method.
+     *
+     * @param resourceInfo the resource info
+     */
+    public void setResourceInfo(ResourceInfo resourceInfo) {
+        this.resourceInfo = resourceInfo;
+        this.properties.put(RESOURCE_INFO_PROPERTY, resourceInfo);
     }
 
     @Override
