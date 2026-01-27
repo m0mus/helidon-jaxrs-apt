@@ -51,6 +51,7 @@ public class JaxRsProcessor extends AbstractProcessor {
     private static final TypeName RESPONSE_CONTEXT = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.HelidonContainerResponseContext");
     private static final TypeName READER_CONTEXT = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.HelidonReaderInterceptorContext");
     private static final TypeName WRITER_CONTEXT = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.HelidonWriterInterceptorContext");
+    private static final TypeName PRE_MATCHING_FILTER = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.JaxRsPreMatchingFilter");
 
     private static final int DEFAULT_PRIORITY = 5000;
 
@@ -308,7 +309,7 @@ public class JaxRsProcessor extends AbstractProcessor {
                     .addContent("this.objectMapper = new ").addContent(OBJECT_MAPPER).addContentLine("();")
                     .addContent("this.filterContext = new ").addContent(FILTER_CONTEXT).addContentLine("();");
 
-            addFilterRegistrations(ctor, preMatchingRequestFilters, "addPreMatchingRequestFilter");
+            // Note: Pre-matching filters are registered at routing level via routing.addFilter()
             addFilterRegistrations(ctor, requestFilters, "addRequestFilter");
             addFilterRegistrations(ctor, responseFilters, "addResponseFilter");
             addFilterRegistrations(ctor, readerInterceptors, "addReaderInterceptor");
@@ -489,6 +490,25 @@ public class JaxRsProcessor extends AbstractProcessor {
                         .addParameter("routing", "the Helidon HTTP routing builder")
                         .build());
 
+        // Register pre-matching filters as a Helidon Filter (runs BEFORE routing)
+        if (!preMatchingRequestFilters.isEmpty()) {
+            registerMethod.addContentLine("// Register pre-matching filters as Helidon Filter (runs before routing)");
+            registerMethod.addContent("java.util.List<jakarta.ws.rs.container.ContainerRequestFilter> _preMatchingFilters = java.util.List.of(");
+            boolean first = true;
+            for (FilterInfo filter : preMatchingRequestFilters) {
+                if (!first) {
+                    registerMethod.addContent(", ");
+                }
+                first = false;
+                registerMethod.addContent("new ").addContent(filter.typeElement.getQualifiedName().toString()).addContent("()");
+            }
+            registerMethod.addContentLine(");");
+            registerMethod.addContent("routing.addFilter(new ").addContent(PRE_MATCHING_FILTER)
+                    .addContentLine("(_preMatchingFilters));");
+            registerMethod.addContentLine("");
+        }
+
+        // Register routes
         for (RouteInfo route : routes) {
             registerMethod.addContent("routing.")
                     .addContent(route.httpMethod.toLowerCase())
@@ -587,10 +607,8 @@ public class JaxRsProcessor extends AbstractProcessor {
         handler.addContentLine("try {");
         handler.increaseContentPadding();
 
-        // Pre-matching filters
-        generatePreMatchingFilters(handler);
-
-        // Post-matching request filters
+        // Note: Pre-matching filters are registered as a Helidon Filter and run before routing
+        // Post-matching request filters (run after routing, have access to matched route info)
         generateRequestFilters(handler);
 
         // Content negotiation checks

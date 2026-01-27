@@ -22,7 +22,39 @@ public class TestFilterResource {
     @Path("/test")
     @Produces(MediaType.TEXT_PLAIN)
     public String test() {
-        return "filtered";
+        return "filter-test";
+    }
+
+    /**
+     * POST endpoint for method override testing.
+     */
+    @POST
+    @Path("/test")
+    @Consumes(MediaType.TEXT_PLAIN)
+    @Produces(MediaType.TEXT_PLAIN)
+    public String testPost(String body) {
+        return "created:" + body;
+    }
+
+    /**
+     * PUT endpoint for method override testing.
+     */
+    @PUT
+    @Path("/test")
+    @Consumes(MediaType.TEXT_PLAIN)
+    @Produces(MediaType.TEXT_PLAIN)
+    public String testPut(String body) {
+        return "updated:" + body;
+    }
+
+    /**
+     * DELETE endpoint for method override testing.
+     */
+    @DELETE
+    @Path("/test")
+    @Produces(MediaType.TEXT_PLAIN)
+    public String testDelete() {
+        return "deleted";
     }
 
     /**
