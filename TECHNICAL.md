@@ -49,6 +49,26 @@ This module does not include:
 
 - JAX-RS resources or routing
 - Annotation processing
-- Interceptors or exception mappers
+- Reader/writer interceptors or exception mappers
 - JAX-RS parameter extraction
+
+### Unsupported ContainerRequestContext Methods
+
+The following methods are not supported in post-matching request filters:
+
+- `setRequestUri(URI)` / `setRequestUri(URI, URI)` - URI modification must happen in pre-matching filters
+- `setMethod(String)` - HTTP method modification must happen in pre-matching filters
+- `getRequest()` - Conditional request evaluation (preconditions, ETags) not implemented
+
+Pre-matching filters support `setRequestUri()` and `setMethod()`, but not `getRequest()`.
+
+### Unsupported ContainerResponseContext Methods
+
+- `getEntityStream()` / `setEntityStream(OutputStream)` - Stream-based entity manipulation belongs to writer interceptors
+- Use `setEntity(Object)` for entity replacement instead
+
+These limitations affect filters that require:
+- HTTP conditional request processing (If-Match, If-None-Match, If-Modified-Since)
+- Advanced content negotiation with variant selection
+- Stream-based response entity transformation
 
