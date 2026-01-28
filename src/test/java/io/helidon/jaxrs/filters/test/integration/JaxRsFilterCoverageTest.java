@@ -69,7 +69,7 @@ class JaxRsFilterCoverageTest {
         assertThat(CoverageTracker.value("pre.uri.original.path"), notNullValue());
         assertThat(CoverageTracker.value("pre.uri.modified.path"), notNullValue());
         assertThat(CoverageTracker.value("pre.getRequest"), is("unsupported"));
-        assertThat(CoverageTracker.value("pre.setEntityStream"), is("unsupported"));
+        assertThat(CoverageTracker.value("pre.setEntityStream"), is("supported"));
         assertThat(CoverageTracker.value("pre.security.scheme"), is("CUSTOM"));
     }
 
@@ -106,7 +106,7 @@ class JaxRsFilterCoverageTest {
         assertThat(CoverageTracker.value("request.setRequestUri"), is("unsupported"));
         assertThat(CoverageTracker.value("request.setRequestUri.base"), is("unsupported"));
         assertThat(CoverageTracker.value("request.setMethod"), is("unsupported"));
-        assertThat(CoverageTracker.value("request.setEntityStream"), is("unsupported"));
+        assertThat(CoverageTracker.value("request.setEntityStream"), is("supported"));
         assertThat(CoverageTracker.value("request.resourceInfo.exists"), is("true"));
         assertThat(CoverageTracker.value("request.resourceInfo.property"), is("true"));
     }

@@ -79,6 +79,7 @@ public class PreMatchingCoverageFilter implements ContainerRequestFilter {
 
         try {
             requestContext.setEntityStream(new java.io.ByteArrayInputStream(new byte[0]));
+            CoverageTracker.record("pre.setEntityStream", "supported");
         } catch (UnsupportedOperationException ex) {
             CoverageTracker.record("pre.setEntityStream", "unsupported");
         }

@@ -95,6 +95,7 @@ public class RequestCoverageFilter implements ContainerRequestFilter {
 
             try {
                 requestContext.setEntityStream(new java.io.ByteArrayInputStream(new byte[0]));
+                CoverageTracker.record("request.setEntityStream", "supported");
             } catch (UnsupportedOperationException ex) {
                 CoverageTracker.record("request.setEntityStream", "unsupported");
             }
