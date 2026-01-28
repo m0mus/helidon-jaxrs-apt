@@ -11,7 +11,6 @@ import java.lang.annotation.Annotation;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.ServiceLoader;
@@ -23,6 +22,8 @@ import java.util.Set;
 public final class JaxRsFilterSupport {
 
     private static final int DEFAULT_PRIORITY = 5000;
+    private static final java.util.concurrent.atomic.AtomicBoolean JAXRS_ROUTING_REGISTERED =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
     private JaxRsFilterSupport() {
     }
@@ -99,7 +100,7 @@ public final class JaxRsFilterSupport {
             for (ProviderEntry<ContainerRequestFilter> entry : preMatchingFilters) {
                 preMatchingList.add(entry.provider());
             }
-            routing.addFilter(new JaxRsPreMatchingFilter(preMatchingList));
+            routing.addFilter(new JaxRsFilterOnlyPreMatchingFilter(preMatchingList));
         }
 
         for (ProviderEntry<ContainerRequestFilter> entry : requestFilters) {
@@ -124,11 +125,39 @@ public final class JaxRsFilterSupport {
         }
     }
 
+    /**
+     * Mark that JAX-RS routing is registered in this application.
+     */
+    public static void markJaxRsRouting() {
+        JAXRS_ROUTING_REGISTERED.set(true);
+    }
+
+    /**
+     * Check whether JAX-RS routing is registered in this application.
+     *
+     * @return true if JAX-RS routing is registered
+     */
+    public static boolean isJaxRsRoutingRegistered() {
+        return JAXRS_ROUTING_REGISTERED.get();
+    }
+
+    /**
+     * Reset the JAX-RS routing marker.
+     * Intended for tests that run multiple servers in the same JVM.
+     */
+    public static void resetJaxRsRoutingForTests() {
+        JAXRS_ROUTING_REGISTERED.set(false);
+    }
+
     private static List<Object> loadProviders(ClassLoader classLoader) {
-        LinkedHashSet<Object> providers = new LinkedHashSet<>();
-        ServiceLoader.load(ContainerRequestFilter.class, classLoader).forEach(providers::add);
-        ServiceLoader.load(ContainerResponseFilter.class, classLoader).forEach(providers::add);
-        return new ArrayList<>(providers);
+        java.util.LinkedHashMap<Class<?>, Object> providers = new java.util.LinkedHashMap<>();
+        for (ContainerRequestFilter filter : ServiceLoader.load(ContainerRequestFilter.class, classLoader)) {
+            providers.putIfAbsent(filter.getClass(), filter);
+        }
+        for (ContainerResponseFilter filter : ServiceLoader.load(ContainerResponseFilter.class, classLoader)) {
+            providers.putIfAbsent(filter.getClass(), filter);
+        }
+        return new ArrayList<>(providers.values());
     }
 
     private static int priority(Class<?> providerClass) {

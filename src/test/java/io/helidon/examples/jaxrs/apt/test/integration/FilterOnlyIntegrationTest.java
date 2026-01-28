@@ -1,10 +1,7 @@
 package io.helidon.examples.jaxrs.apt.test.integration;
 
+import io.helidon.examples.jaxrs.apt.runtime.JaxRsFilterFeature;
 import io.helidon.examples.jaxrs.apt.runtime.JaxRsFilterSupport;
-import io.helidon.examples.jaxrs.apt.test.filter.OrderTrackingFilter;
-import io.helidon.examples.jaxrs.apt.test.filter.PreMatchingTestFilter;
-import io.helidon.examples.jaxrs.apt.test.filter.Priority100Filter;
-import io.helidon.examples.jaxrs.apt.test.filter.Priority300Filter;
 import io.helidon.examples.jaxrs.apt.test.util.FilterOrderTracker;
 import io.helidon.webclient.api.WebClient;
 import io.helidon.webserver.http.HttpRouting;
@@ -18,7 +15,6 @@ import java.util.List;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
-import static org.hamcrest.Matchers.is;
 
 /**
  * Integration tests for JAX-RS filters without JAX-RS resources.
@@ -34,19 +30,13 @@ class FilterOnlyIntegrationTest {
 
     @SetUpRoute
     static void routing(HttpRouting.Builder routing) {
-        List<Object> providers = List.of(
-                new PreMatchingTestFilter(),
-                new Priority100Filter(),
-                new OrderTrackingFilter(),
-                new Priority300Filter()
-        );
-        JaxRsFilterSupport.register(routing, providers);
-
+        routing.addFeature(JaxRsFilterFeature::new);
         routing.get("/plain", (req, res) -> res.send("plain"));
     }
 
     @BeforeEach
     void setUp() {
+        JaxRsFilterSupport.resetJaxRsRoutingForTests();
         FilterOrderTracker.clear();
     }
 

@@ -36,6 +36,10 @@ public class JaxRsFilterOnlyFilter implements Filter {
 
     @Override
     public void filter(FilterChain chain, RoutingRequest req, RoutingResponse res) {
+        if (JaxRsFilterSupport.isJaxRsRoutingRegistered()) {
+            chain.proceed();
+            return;
+        }
         if (filterContext.getRequestFiltersWithBindings().isEmpty()
                 && filterContext.getResponseFiltersWithBindings().isEmpty()) {
             chain.proceed();

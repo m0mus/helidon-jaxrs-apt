@@ -58,6 +58,7 @@ public class JaxRsProcessor extends AbstractProcessor {
     private static final TypeName RESPONSE_DATA = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.JaxRsResponseData");
     private static final TypeName ENTRYPOINT_HANDLER = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.JaxRsEntryPointHandler");
     private static final TypeName POST_MATCHING_INTERCEPTOR = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.JaxRsPostMatchingInterceptor");
+    private static final TypeName FILTER_SUPPORT = TypeName.create("io.helidon.examples.jaxrs.apt.runtime.JaxRsFilterSupport");
 
     private static final int DEFAULT_PRIORITY = 5000;
 
@@ -506,6 +507,9 @@ public class JaxRsProcessor extends AbstractProcessor {
                         .addLine("Register all routes with the routing builder.")
                         .addParameter("routing", "the Helidon HTTP routing builder")
                         .build());
+
+        registerMethod.addContent(FILTER_SUPPORT).addContentLine(".markJaxRsRouting();");
+        registerMethod.addContentLine("");
 
         // Register context propagation filter FIRST (enables Contexts.context() in handlers)
         registerMethod.addContentLine("// Register context propagation filter (enables @Context injection in filters)");
