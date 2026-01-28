@@ -1,6 +1,6 @@
 package io.helidon.jaxrs.filters.test.filter;
 
-import io.helidon.jaxrs.filters.runtime.HelidonContainerRequestContext;
+import io.helidon.jaxrs.filters.HelidonContainerRequestContext;
 import io.helidon.jaxrs.filters.test.util.CoverageTracker;
 import jakarta.annotation.Priority;
 import jakarta.ws.rs.container.ContainerRequestContext;
@@ -166,4 +166,5 @@ public class RequestCoverageFilter implements ContainerRequestFilter {
         return null;
     }
 }
+
 

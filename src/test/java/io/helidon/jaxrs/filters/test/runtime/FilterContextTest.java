@@ -1,10 +1,10 @@
 package io.helidon.jaxrs.filters.test.runtime;
 
-import io.helidon.jaxrs.filters.runtime.FilterContext;
-import io.helidon.jaxrs.filters.runtime.HttpHeadersProxy;
-import io.helidon.jaxrs.filters.runtime.ResourceInfoProxy;
-import io.helidon.jaxrs.filters.runtime.SecurityContextProxy;
-import io.helidon.jaxrs.filters.runtime.UriInfoProxy;
+import io.helidon.jaxrs.filters.FilterContext;
+import io.helidon.jaxrs.filters.HttpHeadersProxy;
+import io.helidon.jaxrs.filters.ResourceInfoProxy;
+import io.helidon.jaxrs.filters.SecurityContextProxy;
+import io.helidon.jaxrs.filters.UriInfoProxy;
 import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerRequestFilter;
 import jakarta.ws.rs.container.ResourceInfo;
@@ -88,4 +88,5 @@ class FilterContextTest {
         }
     }
 }
+
 

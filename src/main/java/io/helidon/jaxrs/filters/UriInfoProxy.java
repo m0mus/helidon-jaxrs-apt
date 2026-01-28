@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.runtime;
+package io.helidon.jaxrs.filters;
 
 import io.helidon.common.context.Contexts;
 import jakarta.ws.rs.core.MultivaluedMap;
@@ -129,4 +129,5 @@ public class UriInfoProxy implements UriInfo {
         return delegate().relativize(uri);
     }
 }
+
 

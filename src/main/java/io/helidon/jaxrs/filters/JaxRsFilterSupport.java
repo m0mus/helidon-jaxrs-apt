@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.runtime;
+package io.helidon.jaxrs.filters;
 
 import io.helidon.webserver.http.HttpRouting;
 import jakarta.annotation.Priority;
@@ -154,5 +154,6 @@ public final class JaxRsFilterSupport {
     private record ProviderEntry<T>(T provider, int priority, Set<String> bindings) {
     }
 }
+
 
 

@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.runtime;
+package io.helidon.jaxrs.filters;
 
 import io.helidon.webserver.http.ServerRequest;
 import jakarta.ws.rs.core.*;
@@ -151,4 +151,5 @@ public class HelidonUriInfo implements UriInfo {
         }
     }
 }
+
 

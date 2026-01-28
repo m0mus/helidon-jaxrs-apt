@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.runtime;
+package io.helidon.jaxrs.filters;
 
 import jakarta.ws.rs.container.ContainerRequestFilter;
 import jakarta.ws.rs.container.ContainerResponseFilter;
@@ -188,4 +188,5 @@ public class FilterContext {
         contextFieldCache.clear();
     }
 }
+
 

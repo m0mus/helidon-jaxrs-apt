@@ -1,6 +1,6 @@
 package io.helidon.jaxrs.filters.test.integration;
 
-import io.helidon.jaxrs.filters.runtime.JaxRsFilterFeature;
+import io.helidon.jaxrs.filters.JaxRsFilterFeature;
 import io.helidon.jaxrs.filters.test.util.FilterOrderTracker;
 import io.helidon.webclient.api.WebClient;
 import io.helidon.webserver.http.HttpRouting;
@@ -85,4 +85,5 @@ class JaxRsFilterIntegrationTest {
         assertThat(responseOrder, is(List.of()));
     }
 }
+
 

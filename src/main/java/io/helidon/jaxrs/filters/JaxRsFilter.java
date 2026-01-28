@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.runtime;
+package io.helidon.jaxrs.filters;
 
 import io.helidon.service.registry.InterceptionContext;
 import io.helidon.webserver.http.Filter;
@@ -169,4 +169,5 @@ public class JaxRsFilter implements Filter, HttpEntryPoint.Interceptor {
         }
     }
 }
+
 

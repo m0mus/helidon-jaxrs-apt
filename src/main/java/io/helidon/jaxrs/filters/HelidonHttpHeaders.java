@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.runtime;
+package io.helidon.jaxrs.filters;
 
 import io.helidon.http.HeaderName;
 import io.helidon.http.HeaderNames;
@@ -117,4 +117,5 @@ public class HelidonHttpHeaders implements HttpHeaders {
         return -1;
     }
 }
+
 

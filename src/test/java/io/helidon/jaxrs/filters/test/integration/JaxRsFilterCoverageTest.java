@@ -1,6 +1,6 @@
 package io.helidon.jaxrs.filters.test.integration;
 
-import io.helidon.jaxrs.filters.runtime.JaxRsFilterFeature;
+import io.helidon.jaxrs.filters.JaxRsFilterFeature;
 import io.helidon.jaxrs.filters.test.util.CoverageTracker;
 import io.helidon.http.HeaderNames;
 import io.helidon.webclient.api.WebClient;
@@ -167,4 +167,5 @@ class JaxRsFilterCoverageTest {
         assertThat(CoverageTracker.value("auth.digest.user"), is("null"));
     }
 }
+
 

@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.runtime;
+package io.helidon.jaxrs.filters;
 
 import io.helidon.common.context.Contexts;
 import jakarta.ws.rs.container.ResourceInfo;
@@ -40,4 +40,5 @@ public class ResourceInfoProxy implements ResourceInfo {
         return delegate().getResourceClass();
     }
 }
+
 

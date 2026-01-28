@@ -2,11 +2,11 @@ package io.helidon.jaxrs.filters.test.runtime;
 
 import io.helidon.common.context.Context;
 import io.helidon.common.context.Contexts;
-import io.helidon.jaxrs.filters.runtime.HttpHeadersProxy;
-import io.helidon.jaxrs.filters.runtime.ResourceInfoProxy;
-import io.helidon.jaxrs.filters.runtime.SecurityContextProxy;
-import io.helidon.jaxrs.filters.runtime.SimpleRuntimeDelegate;
-import io.helidon.jaxrs.filters.runtime.UriInfoProxy;
+import io.helidon.jaxrs.filters.HttpHeadersProxy;
+import io.helidon.jaxrs.filters.ResourceInfoProxy;
+import io.helidon.jaxrs.filters.SecurityContextProxy;
+import io.helidon.jaxrs.filters.SimpleRuntimeDelegate;
+import io.helidon.jaxrs.filters.UriInfoProxy;
 import jakarta.ws.rs.container.ResourceInfo;
 import jakarta.ws.rs.core.Cookie;
 import jakarta.ws.rs.core.HttpHeaders;
@@ -328,4 +328,5 @@ class ContextProxyTest {
         }
     }
 }
+
 

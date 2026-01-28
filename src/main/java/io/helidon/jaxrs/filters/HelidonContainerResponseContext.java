@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.runtime;
+package io.helidon.jaxrs.filters;
 
 import jakarta.ws.rs.container.ContainerResponseContext;
 import jakarta.ws.rs.core.*;
@@ -207,4 +207,5 @@ public class HelidonContainerResponseContext implements ContainerResponseContext
         throw new UnsupportedOperationException("setEntityStream not supported");
     }
 }
+
 

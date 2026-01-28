@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.runtime;
+package io.helidon.jaxrs.filters;
 
 import io.helidon.webserver.http.ServerRequest;
 import jakarta.ws.rs.container.ContainerRequestContext;
@@ -208,4 +208,5 @@ public class HelidonContainerRequestContext implements ContainerRequestContext {
         return abortMessage;
     }
 }
+
 

@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.runtime;
+package io.helidon.jaxrs.filters;
 
 import io.helidon.common.context.Context;
 import io.helidon.common.context.Contexts;
@@ -55,4 +55,5 @@ public class JaxRsContextFilter implements Filter {
         Contexts.runInContext(ctx, chain::proceed);
     }
 }
+
 

@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.runtime;
+package io.helidon.jaxrs.filters;
 
 import io.helidon.webserver.http.HttpFeature;
 import io.helidon.webserver.http.HttpRouting;
@@ -13,4 +13,5 @@ public class JaxRsFilterFeature implements HttpFeature {
         JaxRsFilterSupport.register(routing);
     }
 }
+
 

@@ -1,7 +1,7 @@
 package io.helidon.jaxrs.filters.test.runtime;
 
-import io.helidon.jaxrs.filters.runtime.FilterContext;
-import io.helidon.jaxrs.filters.runtime.JaxRsFilter;
+import io.helidon.jaxrs.filters.FilterContext;
+import io.helidon.jaxrs.filters.JaxRsFilter;
 import io.helidon.webserver.http.FilterChain;
 import io.helidon.webserver.http.HttpEntryPoint;
 import io.helidon.webserver.http.ServerRequest;
@@ -43,5 +43,6 @@ class JaxRsFilterTest {
         assertThat(proceeded.get(), is(true));
     }
 }
+
 
 

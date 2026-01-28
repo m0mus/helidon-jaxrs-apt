@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.runtime;
+package io.helidon.jaxrs.filters;
 
 import io.helidon.http.HttpPrologue;
 import io.helidon.webserver.http.Filter;
@@ -109,4 +109,5 @@ public class JaxRsPreMatchingFilter implements Filter {
         }
     }
 }
+
 

@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.runtime;
+package io.helidon.jaxrs.filters;
 
 import io.helidon.common.context.Contexts;
 import jakarta.ws.rs.core.SecurityContext;
@@ -50,4 +50,5 @@ public class SecurityContextProxy implements SecurityContext {
         return delegate().getAuthenticationScheme();
     }
 }
+
 

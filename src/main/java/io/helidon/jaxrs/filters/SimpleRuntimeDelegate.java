@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.runtime;
+package io.helidon.jaxrs.filters;
 
 import jakarta.ws.rs.SeBootstrap;
 import jakarta.ws.rs.core.Application;
@@ -817,4 +817,5 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
         }
     }
 }
+
 

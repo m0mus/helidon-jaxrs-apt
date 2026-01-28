@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.runtime;
+package io.helidon.jaxrs.filters;
 
 import io.helidon.webserver.http.ServerRequest;
 import jakarta.ws.rs.core.SecurityContext;
@@ -106,4 +106,5 @@ public class HelidonSecurityContext implements SecurityContext {
         return authenticationScheme;
     }
 }
+
 
