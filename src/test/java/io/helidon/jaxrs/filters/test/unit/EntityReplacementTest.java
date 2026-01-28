@@ -1,5 +1,6 @@
 package io.helidon.jaxrs.filters.test.unit;
 
+import io.helidon.http.HeaderNames;
 import io.helidon.jaxrs.filters.JaxRsFilterFeature;
 import io.helidon.jaxrs.filters.test.filter.EntityReplacementFilter;
 import io.helidon.webclient.api.WebClient;
@@ -43,7 +44,7 @@ class EntityReplacementTest {
         // For now, this demonstrates the integration test pattern
 
         String response = client.post("/echo")
-                .header("X-Replace-Entity", "true")
+                .header(HeaderNames.create("X-Replace-Entity"), "true")
                 .submit("hello world")
                 .as(String.class);
 
