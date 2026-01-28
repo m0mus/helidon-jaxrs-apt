@@ -22,9 +22,6 @@ import java.util.Set;
 public final class JaxRsFilterSupport {
 
     private static final int DEFAULT_PRIORITY = 5000;
-    private static final java.util.concurrent.atomic.AtomicBoolean JAXRS_ROUTING_REGISTERED =
-            new java.util.concurrent.atomic.AtomicBoolean();
-
     private JaxRsFilterSupport() {
     }
 
@@ -57,6 +54,8 @@ public final class JaxRsFilterSupport {
     public static void register(HttpRouting.Builder routing, Iterable<?> providers) {
         Objects.requireNonNull(routing, "routing");
         Objects.requireNonNull(providers, "providers");
+
+        SimpleRuntimeDelegate.init();
 
         FilterContext filterContext = new FilterContext();
         List<ProviderEntry<ContainerRequestFilter>> preMatchingFilters = new ArrayList<>();
@@ -100,7 +99,7 @@ public final class JaxRsFilterSupport {
             for (ProviderEntry<ContainerRequestFilter> entry : preMatchingFilters) {
                 preMatchingList.add(entry.provider());
             }
-            routing.addFilter(new JaxRsFilterOnlyPreMatchingFilter(preMatchingList));
+            routing.addFilter(new JaxRsPreMatchingFilter(preMatchingList));
         }
 
         for (ProviderEntry<ContainerRequestFilter> entry : requestFilters) {
@@ -125,29 +124,6 @@ public final class JaxRsFilterSupport {
         }
     }
 
-    /**
-     * Mark that JAX-RS routing is registered in this application.
-     */
-    public static void markJaxRsRouting() {
-        JAXRS_ROUTING_REGISTERED.set(true);
-    }
-
-    /**
-     * Check whether JAX-RS routing is registered in this application.
-     *
-     * @return true if JAX-RS routing is registered
-     */
-    public static boolean isJaxRsRoutingRegistered() {
-        return JAXRS_ROUTING_REGISTERED.get();
-    }
-
-    /**
-     * Reset the JAX-RS routing marker.
-     * Intended for tests that run multiple servers in the same JVM.
-     */
-    public static void resetJaxRsRoutingForTests() {
-        JAXRS_ROUTING_REGISTERED.set(false);
-    }
 
     private static List<Object> loadProviders(ClassLoader classLoader) {
         java.util.LinkedHashMap<Class<?>, Object> providers = new java.util.LinkedHashMap<>();

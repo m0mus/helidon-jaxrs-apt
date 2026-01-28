@@ -195,6 +195,14 @@ public class PreMatchingRequestContext implements ContainerRequestContext {
     @Override
     public String getHeaderString(String name) {
         List<String> values = modifiableHeaders.get(name);
+        if ((values == null || values.isEmpty()) && name != null) {
+            for (Map.Entry<String, List<String>> entry : modifiableHeaders.entrySet()) {
+                if (entry.getKey().equalsIgnoreCase(name)) {
+                    values = entry.getValue();
+                    break;
+                }
+            }
+        }
         if (values == null || values.isEmpty()) {
             return null;
         }

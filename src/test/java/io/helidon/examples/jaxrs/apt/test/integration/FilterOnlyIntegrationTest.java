@@ -1,7 +1,6 @@
 package io.helidon.examples.jaxrs.apt.test.integration;
 
 import io.helidon.examples.jaxrs.apt.runtime.JaxRsFilterFeature;
-import io.helidon.examples.jaxrs.apt.runtime.JaxRsFilterSupport;
 import io.helidon.examples.jaxrs.apt.test.util.FilterOrderTracker;
 import io.helidon.webclient.api.WebClient;
 import io.helidon.webserver.http.HttpRouting;
@@ -15,6 +14,9 @@ import java.util.List;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
 
 /**
  * Integration tests for JAX-RS filters without JAX-RS resources.
@@ -32,11 +34,11 @@ class FilterOnlyIntegrationTest {
     static void routing(HttpRouting.Builder routing) {
         routing.addFeature(JaxRsFilterFeature::new);
         routing.get("/plain", (req, res) -> res.send("plain"));
+        routing.get("/filter/abort", (req, res) -> res.send("should-not-reach"));
     }
 
     @BeforeEach
     void setUp() {
-        JaxRsFilterSupport.resetJaxRsRoutingForTests();
         FilterOrderTracker.clear();
     }
 
@@ -48,10 +50,12 @@ class FilterOnlyIntegrationTest {
         List<String> requestOrder = FilterOrderTracker.getRequestFilterOrder();
         assertThat(requestOrder, contains(
                 "PreMatchingTestFilter",
+                "PreMatchingContextFilter:OK",
                 "Priority100Filter",
                 "OrderTrackingFilter",
                 "Priority300Filter"
         ));
+        assertThat(requestOrder, not(hasItem("AuditFilter")));
 
         List<String> responseOrder = FilterOrderTracker.getResponseFilterOrder();
         assertThat(responseOrder, contains(
@@ -59,5 +63,25 @@ class FilterOnlyIntegrationTest {
                 "OrderTrackingFilter",
                 "Priority100Filter"
         ));
+        assertThat(responseOrder, not(hasItem("AuditFilter")));
+    }
+
+    @Test
+    @DisplayName("Request abort stops processing and skips response filters")
+    void testRequestAbort() {
+        var response = client.get("/filter/abort").request();
+
+        assertThat(response.status().code(), is(403));
+
+        List<String> requestOrder = FilterOrderTracker.getRequestFilterOrder();
+        assertThat(requestOrder, contains(
+                "PreMatchingTestFilter",
+                "PreMatchingContextFilter:OK",
+                "Priority100Filter",
+                "AbortFilter"
+        ));
+
+        List<String> responseOrder = FilterOrderTracker.getResponseFilterOrder();
+        assertThat(responseOrder, is(List.of()));
     }
 }

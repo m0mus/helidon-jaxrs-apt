@@ -7,10 +7,6 @@ import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.SecurityContext;
 import jakarta.ws.rs.core.UriInfo;
-import jakarta.ws.rs.ext.ExceptionMapper;
-import jakarta.ws.rs.ext.ReaderInterceptor;
-import jakarta.ws.rs.ext.WriterInterceptor;
-
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.lang.reflect.Field;
@@ -22,14 +18,13 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Manages filters, interceptors, and exception mappers with support for name bindings.
+ * Manages JAX-RS request/response filters with support for name bindings.
  *
  * <p>This class is responsible for:
  * <ul>
- *   <li>Storing and retrieving filters, interceptors, and exception mappers</li>
+ *   <li>Storing and retrieving request/response filters</li>
  *   <li>Name binding matching for selective filter application</li>
  *   <li>Injecting @Context proxies into filter instances</li>
- *   <li>Finding the most specific exception mapper for a given exception</li>
  * </ul>
  */
 public class FilterContext {
@@ -53,21 +48,8 @@ public class FilterContext {
     // Cache key for field lookups
     private record FieldCacheKey(Class<?> filterClass, Class<?> contextType) {}
 
-    private final List<ContainerRequestFilter> preMatchingRequestFilters = new ArrayList<>();
     private final List<FilterEntry<ContainerRequestFilter>> requestFilters = new ArrayList<>();
     private final List<FilterEntry<ContainerResponseFilter>> responseFilters = new ArrayList<>();
-    private final List<InterceptorEntry<ReaderInterceptor>> readerInterceptors = new ArrayList<>();
-    private final List<InterceptorEntry<WriterInterceptor>> writerInterceptors = new ArrayList<>();
-    private final List<ExceptionMapperEntry<?>> exceptionMappers = new ArrayList<>();
-
-    // Pre-matching filters (no name binding support)
-    public void addPreMatchingRequestFilter(ContainerRequestFilter filter) {
-        preMatchingRequestFilters.add(filter);
-    }
-
-    public List<ContainerRequestFilter> getPreMatchingRequestFilters() {
-        return preMatchingRequestFilters;
-    }
 
     // Request filters
     public void addRequestFilter(ContainerRequestFilter filter) {
@@ -95,83 +77,6 @@ public class FilterContext {
         return responseFilters;
     }
 
-    // Reader interceptors
-    public void addReaderInterceptor(ReaderInterceptor interceptor) {
-        readerInterceptors.add(new InterceptorEntry<>(interceptor, Set.of()));
-    }
-
-    public void addReaderInterceptor(ReaderInterceptor interceptor, Set<String> nameBindings) {
-        readerInterceptors.add(new InterceptorEntry<>(interceptor, nameBindings));
-    }
-
-    public List<InterceptorEntry<ReaderInterceptor>> getReaderInterceptorsWithBindings() {
-        return readerInterceptors;
-    }
-
-    // Writer interceptors
-    public void addWriterInterceptor(WriterInterceptor interceptor) {
-        writerInterceptors.add(new InterceptorEntry<>(interceptor, Set.of()));
-    }
-
-    public void addWriterInterceptor(WriterInterceptor interceptor, Set<String> nameBindings) {
-        writerInterceptors.add(new InterceptorEntry<>(interceptor, nameBindings));
-    }
-
-    public List<InterceptorEntry<WriterInterceptor>> getWriterInterceptorsWithBindings() {
-        return writerInterceptors;
-    }
-
-    // Exception mappers
-    public <T extends Throwable> void addExceptionMapper(ExceptionMapper<T> mapper, Class<T> exceptionType) {
-        exceptionMappers.add(new ExceptionMapperEntry<>(mapper, exceptionType));
-    }
-
-    /**
-     * Find an exception mapper for the given exception.
-     * Returns null if no mapper is found.
-     * Searches for the most specific mapper (exact type match first, then superclasses).
-     */
-    @SuppressWarnings("unchecked")
-    public <T extends Throwable> ExceptionMapper<T> findExceptionMapper(T exception) {
-        Class<?> exceptionClass = exception.getClass();
-
-        // First try exact match
-        for (ExceptionMapperEntry<?> entry : exceptionMappers) {
-            if (entry.exceptionType().equals(exceptionClass)) {
-                return (ExceptionMapper<T>) entry.mapper();
-            }
-        }
-
-        // Then try superclass matches (find the most specific one)
-        ExceptionMapperEntry<?> bestMatch = null;
-        int bestDistance = Integer.MAX_VALUE;
-
-        for (ExceptionMapperEntry<?> entry : exceptionMappers) {
-            if (entry.exceptionType().isAssignableFrom(exceptionClass)) {
-                int distance = getInheritanceDistance(exceptionClass, entry.exceptionType());
-                if (distance < bestDistance) {
-                    bestDistance = distance;
-                    bestMatch = entry;
-                }
-            }
-        }
-
-        return bestMatch != null ? (ExceptionMapper<T>) bestMatch.mapper() : null;
-    }
-
-    private int getInheritanceDistance(Class<?> from, Class<?> to) {
-        int distance = 0;
-        Class<?> current = from;
-        while (current != null && !current.equals(to)) {
-            distance++;
-            current = current.getSuperclass();
-        }
-        return current != null ? distance : Integer.MAX_VALUE;
-    }
-
-    public List<ExceptionMapperEntry<?>> getExceptionMappers() {
-        return exceptionMappers;
-    }
 
     /**
      * Entry for a filter with its name bindings.
@@ -195,31 +100,6 @@ public class FilterContext {
             return false;
         }
     }
-
-    /**
-     * Entry for an interceptor with its name bindings.
-     */
-    public record InterceptorEntry<T>(T interceptor, Set<String> nameBindings) {
-        /**
-         * Check if this interceptor should apply to a method with the given bindings.
-         */
-        public boolean matches(Set<String> methodBindings) {
-            if (nameBindings.isEmpty()) {
-                return true; // Global interceptor applies to all
-            }
-            for (String binding : nameBindings) {
-                if (methodBindings.contains(binding)) {
-                    return true;
-                }
-            }
-            return false;
-        }
-    }
-
-    /**
-     * Entry for an exception mapper with its exception type.
-     */
-    public record ExceptionMapperEntry<T extends Throwable>(ExceptionMapper<T> mapper, Class<T> exceptionType) {}
 
     /**
      * Inject all supported @Context proxies into a filter instance.

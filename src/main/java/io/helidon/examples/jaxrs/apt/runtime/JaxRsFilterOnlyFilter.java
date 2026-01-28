@@ -1,9 +1,13 @@
 package io.helidon.examples.jaxrs.apt.runtime;
 
+import io.helidon.service.registry.InterceptionContext;
 import io.helidon.webserver.http.Filter;
 import io.helidon.webserver.http.FilterChain;
+import io.helidon.webserver.http.HttpEntryPoint;
 import io.helidon.webserver.http.RoutingRequest;
 import io.helidon.webserver.http.RoutingResponse;
+import io.helidon.webserver.http.ServerRequest;
+import io.helidon.webserver.http.ServerResponse;
 import jakarta.ws.rs.container.ContainerRequestFilter;
 import jakarta.ws.rs.container.ContainerResponseFilter;
 import jakarta.ws.rs.container.ResourceInfo;
@@ -18,7 +22,7 @@ import java.util.Set;
 /**
  * Filter that runs post-matching JAX-RS filters without JAX-RS resources.
  */
-public class JaxRsFilterOnlyFilter implements Filter {
+public class JaxRsFilterOnlyFilter implements Filter, HttpEntryPoint.Interceptor {
 
     private static final Set<String> NO_BINDINGS = Set.of();
     private static final ResourceInfo NO_RESOURCE_INFO = new NoResourceInfo();
@@ -36,13 +40,23 @@ public class JaxRsFilterOnlyFilter implements Filter {
 
     @Override
     public void filter(FilterChain chain, RoutingRequest req, RoutingResponse res) {
-        if (JaxRsFilterSupport.isJaxRsRoutingRegistered()) {
-            chain.proceed();
-            return;
+        try {
+            filterCommon(req, res, chain::proceed);
+        } catch (Exception ex) {
+            throw new RuntimeException("Filter-only processing failed", ex);
         }
+    }
+
+    @Override
+    public void proceed(InterceptionContext interceptionContext, HttpEntryPoint.Interceptor.Chain chain,
+                        ServerRequest req, ServerResponse res) throws Exception {
+        filterCommon(req, res, () -> chain.proceed(req, res));
+    }
+
+    private void filterCommon(ServerRequest req, ServerResponse res, ThrowingRunnable proceed) throws Exception {
         if (filterContext.getRequestFiltersWithBindings().isEmpty()
                 && filterContext.getResponseFiltersWithBindings().isEmpty()) {
-            chain.proceed();
+            proceed.run();
             return;
         }
 
@@ -79,7 +93,12 @@ public class JaxRsFilterOnlyFilter implements Filter {
             copyResponseHeaders(res, responseContext);
         });
 
-        chain.proceed();
+        proceed.run();
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 
     private void runResponseFilters(HelidonContainerRequestContext requestContext,
@@ -92,7 +111,7 @@ public class JaxRsFilterOnlyFilter implements Filter {
         }
     }
 
-    private void copyExistingHeaders(RoutingResponse res, HelidonContainerResponseContext responseContext) {
+    private void copyExistingHeaders(ServerResponse res, HelidonContainerResponseContext responseContext) {
         for (Map.Entry<String, List<String>> entry : res.headers().toMap().entrySet()) {
             for (String value : entry.getValue()) {
                 if (value != null) {
@@ -103,7 +122,7 @@ public class JaxRsFilterOnlyFilter implements Filter {
         }
     }
 
-    private void copyResponseHeaders(RoutingResponse res, HelidonContainerResponseContext responseContext) {
+    private void copyResponseHeaders(ServerResponse res, HelidonContainerResponseContext responseContext) {
         for (var entry : responseContext.getHeaders().entrySet()) {
             for (var value : entry.getValue()) {
                 if (value != null) {
@@ -113,7 +132,7 @@ public class JaxRsFilterOnlyFilter implements Filter {
         }
     }
 
-    private void sendAbortResponse(RoutingResponse res, HelidonContainerRequestContext requestContext) {
+    private void sendAbortResponse(ServerResponse res, HelidonContainerRequestContext requestContext) {
         String msg = requestContext.getAbortMessage();
         res.status(requestContext.getAbortStatus()).send(msg != null ? msg : "");
     }

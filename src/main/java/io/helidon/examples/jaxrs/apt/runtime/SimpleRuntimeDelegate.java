@@ -1,6 +1,17 @@
 package io.helidon.examples.jaxrs.apt.runtime;
 
-import jakarta.ws.rs.core.*;
+import jakarta.ws.rs.SeBootstrap;
+import jakarta.ws.rs.core.Application;
+import jakarta.ws.rs.core.CacheControl;
+import jakarta.ws.rs.core.EntityTag;
+import jakarta.ws.rs.core.Link;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.MultivaluedHashMap;
+import jakarta.ws.rs.core.MultivaluedMap;
+import jakarta.ws.rs.core.NewCookie;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriBuilder;
+import jakarta.ws.rs.core.Variant;
 import jakarta.ws.rs.ext.RuntimeDelegate;
 
 import java.net.URI;
@@ -8,11 +19,10 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CompletionStage;
 
 /**
- * RuntimeDelegate implementation to support JAX-RS Response building.
- * This is needed for methods that return jakarta.ws.rs.core.Response
- * and for JAX-RS exceptions that internally use Response.status().
+ * Minimal RuntimeDelegate implementation to support filter-only JAX-RS usage.
  */
 public class SimpleRuntimeDelegate extends RuntimeDelegate {
 
@@ -21,15 +31,15 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
     }
 
     /**
-     * Initialize the RuntimeDelegate. Call this early in application startup.
+     * Initialize the RuntimeDelegate if not already set.
      */
     public static void init() {
-        // Static initializer does the work
+        // Static initializer sets the instance.
     }
 
     @Override
     public UriBuilder createUriBuilder() {
-        throw new UnsupportedOperationException("UriBuilder not supported");
+        return new SimpleUriBuilder();
     }
 
     @Override
@@ -59,7 +69,12 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
         if (type == CacheControl.class) {
             return (HeaderDelegate<T>) new CacheControlHeaderDelegate();
         }
-        // For other types, return a simple toString delegate
+        if (type == jakarta.ws.rs.core.Cookie.class) {
+            return (HeaderDelegate<T>) new CookieHeaderDelegate();
+        }
+        if (type == NewCookie.class) {
+            return (HeaderDelegate<T>) new NewCookieHeaderDelegate();
+        }
         return (HeaderDelegate<T>) new ToStringHeaderDelegate();
     }
 
@@ -69,45 +84,70 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
     }
 
     @Override
+    public SeBootstrap.Configuration.Builder createConfigurationBuilder() {
+        throw new UnsupportedOperationException("SeBootstrap Configuration not supported");
+    }
+
+    @Override
+    public CompletionStage<SeBootstrap.Instance> bootstrap(Application application, SeBootstrap.Configuration configuration) {
+        throw new UnsupportedOperationException("SeBootstrap not supported");
+    }
+
+    @Override
+    public CompletionStage<SeBootstrap.Instance> bootstrap(Class<? extends Application> application,
+                                                           SeBootstrap.Configuration configuration) {
+        throw new UnsupportedOperationException("SeBootstrap not supported");
+    }
+
+    @Override
     public jakarta.ws.rs.core.EntityPart.Builder createEntityPartBuilder(String partName) {
         throw new UnsupportedOperationException("EntityPartBuilder not supported");
     }
 
-    @Override
-    public java.util.concurrent.CompletionStage<jakarta.ws.rs.SeBootstrap.Instance> bootstrap(
-            Class<? extends Application> application, jakarta.ws.rs.SeBootstrap.Configuration configuration) {
-        throw new UnsupportedOperationException("SeBootstrap not supported");
-    }
-
-    @Override
-    public java.util.concurrent.CompletionStage<jakarta.ws.rs.SeBootstrap.Instance> bootstrap(
-            Application application, jakarta.ws.rs.SeBootstrap.Configuration configuration) {
-        throw new UnsupportedOperationException("SeBootstrap not supported");
-    }
-
-    @Override
-    public jakarta.ws.rs.SeBootstrap.Configuration.Builder createConfigurationBuilder() {
-        throw new UnsupportedOperationException("SeBootstrap Configuration not supported");
-    }
-
-    // ==================== Header Delegates ====================
-
     private static class MediaTypeHeaderDelegate implements HeaderDelegate<MediaType> {
         @Override
         public MediaType fromString(String value) {
-            return value != null ? MediaType.valueOf(value) : null;
+            if (value == null) {
+                return null;
+            }
+            String[] parts = value.split(";");
+            String typePart = parts[0].trim();
+            String[] typeParts = typePart.split("/", 2);
+            String type = typeParts.length > 0 ? typeParts[0].trim() : "*";
+            String subtype = typeParts.length > 1 ? typeParts[1].trim() : "*";
+            Map<String, String> params = new java.util.LinkedHashMap<>();
+            for (int i = 1; i < parts.length; i++) {
+                String part = parts[i].trim();
+                if (part.isEmpty()) {
+                    continue;
+                }
+                String[] kv = part.split("=", 2);
+                String key = kv[0].trim();
+                String val = kv.length > 1 ? kv[1].trim() : "";
+                if (!key.isEmpty()) {
+                    params.put(key, val);
+                }
+            }
+            return new MediaType(type, subtype, params);
         }
 
         @Override
         public String toString(MediaType value) {
-            return value != null ? value.toString() : null;
+            if (value == null) {
+                return null;
+            }
+            StringBuilder sb = new StringBuilder();
+            sb.append(value.getType()).append("/").append(value.getSubtype());
+            for (Map.Entry<String, String> entry : value.getParameters().entrySet()) {
+                sb.append(";").append(entry.getKey()).append("=").append(entry.getValue());
+            }
+            return sb.toString();
         }
     }
 
     private static class DateHeaderDelegate implements HeaderDelegate<Date> {
         @Override
         public Date fromString(String value) {
-            // Simple implementation - real impl would parse HTTP date format
             return null;
         }
 
@@ -129,6 +169,37 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
         }
     }
 
+    private static class CookieHeaderDelegate implements HeaderDelegate<jakarta.ws.rs.core.Cookie> {
+        @Override
+        public jakarta.ws.rs.core.Cookie fromString(String value) {
+            if (value == null || value.isEmpty()) {
+                return null;
+            }
+            String[] parts = value.split("=", 2);
+            if (parts.length == 2) {
+                return new jakarta.ws.rs.core.Cookie(parts[0].trim(), parts[1].trim());
+            }
+            return new jakarta.ws.rs.core.Cookie(value.trim(), "");
+        }
+
+        @Override
+        public String toString(jakarta.ws.rs.core.Cookie value) {
+            return value != null ? value.toString() : null;
+        }
+    }
+
+    private static class NewCookieHeaderDelegate implements HeaderDelegate<NewCookie> {
+        @Override
+        public NewCookie fromString(String value) {
+            return null;
+        }
+
+        @Override
+        public String toString(NewCookie value) {
+            return value != null ? value.toString() : null;
+        }
+    }
+
     private static class ToStringHeaderDelegate implements HeaderDelegate<Object> {
         @Override
         public Object fromString(String value) {
@@ -141,11 +212,6 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
         }
     }
 
-    // ==================== Response Builder ====================
-
-    /**
-     * Response.ResponseBuilder that tracks status, entity, headers, and media type.
-     */
     private static class SimpleResponseBuilder extends Response.ResponseBuilder {
         private int status = 200;
         private String reasonPhrase;
@@ -319,11 +385,6 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
         }
     }
 
-    // ==================== Response Implementation ====================
-
-    /**
-     * Simple Response implementation with full header and media type support.
-     */
     private static class SimpleResponse extends Response {
         private final int status;
         private final String reasonPhrase;
@@ -331,7 +392,8 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
         private final MediaType mediaType;
         private final MultivaluedMap<String, Object> headers;
 
-        SimpleResponse(int status, String reasonPhrase, Object entity, MediaType mediaType, MultivaluedMap<String, Object> headers) {
+        SimpleResponse(int status, String reasonPhrase, Object entity, MediaType mediaType,
+                       MultivaluedMap<String, Object> headers) {
             this.status = status;
             this.reasonPhrase = reasonPhrase;
             this.entity = entity;
@@ -375,7 +437,7 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
         }
 
         @Override
-        public <T> T readEntity(GenericType<T> entityType) {
+        public <T> T readEntity(jakarta.ws.rs.core.GenericType<T> entityType) {
             throw new UnsupportedOperationException();
         }
 
@@ -385,7 +447,7 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
         }
 
         @Override
-        public <T> T readEntity(GenericType<T> entityType, java.lang.annotation.Annotation[] annotations) {
+        public <T> T readEntity(jakarta.ws.rs.core.GenericType<T> entityType, java.lang.annotation.Annotation[] annotations) {
             throw new UnsupportedOperationException();
         }
 
@@ -494,6 +556,255 @@ public class SimpleRuntimeDelegate extends RuntimeDelegate {
                     .map(v -> v != null ? v.toString() : "")
                     .reduce((a, b) -> a + "," + b)
                     .orElse(null);
+        }
+    }
+
+    private static class SimpleUriBuilder extends UriBuilder {
+        private String scheme;
+        private String userInfo;
+        private String host;
+        private int port = -1;
+        private String path;
+        private String query;
+        private String fragment;
+        private String schemeSpecificPart;
+
+        @Override
+        public UriBuilder clone() {
+            SimpleUriBuilder copy = new SimpleUriBuilder();
+            copy.scheme = scheme;
+            copy.userInfo = userInfo;
+            copy.host = host;
+            copy.port = port;
+            copy.path = path;
+            copy.query = query;
+            copy.fragment = fragment;
+            copy.schemeSpecificPart = schemeSpecificPart;
+            return copy;
+        }
+
+        @Override
+        public UriBuilder uri(URI uri) {
+            if (uri != null) {
+                scheme = uri.getScheme();
+                schemeSpecificPart = uri.getSchemeSpecificPart();
+                userInfo = uri.getUserInfo();
+                host = uri.getHost();
+                port = uri.getPort();
+                path = uri.getPath();
+                query = uri.getQuery();
+                fragment = uri.getFragment();
+            }
+            return this;
+        }
+
+        @Override
+        public UriBuilder uri(String uriTemplate) {
+            if (uriTemplate != null) {
+                uri(URI.create(uriTemplate));
+            }
+            return this;
+        }
+
+        @Override
+        public UriBuilder scheme(String scheme) {
+            this.scheme = scheme;
+            return this;
+        }
+
+        @Override
+        public UriBuilder schemeSpecificPart(String ssp) {
+            this.schemeSpecificPart = ssp;
+            return this;
+        }
+
+        @Override
+        public UriBuilder userInfo(String ui) {
+            this.userInfo = ui;
+            return this;
+        }
+
+        @Override
+        public UriBuilder host(String host) {
+            this.host = host;
+            return this;
+        }
+
+        @Override
+        public UriBuilder port(int port) {
+            this.port = port;
+            return this;
+        }
+
+        @Override
+        public UriBuilder replacePath(String path) {
+            this.path = path;
+            return this;
+        }
+
+        @Override
+        public UriBuilder path(String path) {
+            if (path == null || path.isEmpty()) {
+                return this;
+            }
+            if (this.path == null || this.path.isEmpty()) {
+                this.path = path;
+            } else if (this.path.endsWith("/") || path.startsWith("/")) {
+                this.path = this.path + path;
+            } else {
+                this.path = this.path + "/" + path;
+            }
+            return this;
+        }
+
+        @Override
+        public UriBuilder path(Class resource) {
+            return this;
+        }
+
+        @Override
+        public UriBuilder path(Class resource, String method) {
+            return this;
+        }
+
+        @Override
+        public UriBuilder path(java.lang.reflect.Method method) {
+            return this;
+        }
+
+        @Override
+        public UriBuilder segment(String... segments) {
+            if (segments != null) {
+                for (String segment : segments) {
+                    path(segment);
+                }
+            }
+            return this;
+        }
+
+        @Override
+        public UriBuilder replaceMatrix(String matrix) {
+            return this;
+        }
+
+        @Override
+        public UriBuilder matrixParam(String name, Object... values) {
+            return this;
+        }
+
+        @Override
+        public UriBuilder replaceMatrixParam(String name, Object... values) {
+            return this;
+        }
+
+        @Override
+        public UriBuilder replaceQuery(String query) {
+            this.query = query;
+            return this;
+        }
+
+        @Override
+        public UriBuilder queryParam(String name, Object... values) {
+            if (name == null || values == null || values.length == 0) {
+                return this;
+            }
+            StringBuilder sb = new StringBuilder(query != null ? query : "");
+            for (Object value : values) {
+                if (!sb.isEmpty()) {
+                    sb.append("&");
+                }
+                sb.append(name).append("=").append(value);
+            }
+            query = sb.toString();
+            return this;
+        }
+
+        @Override
+        public UriBuilder replaceQueryParam(String name, Object... values) {
+            return queryParam(name, values);
+        }
+
+        @Override
+        public UriBuilder fragment(String fragment) {
+            this.fragment = fragment;
+            return this;
+        }
+
+        @Override
+        public UriBuilder resolveTemplate(String name, Object value) {
+            return this;
+        }
+
+        @Override
+        public UriBuilder resolveTemplate(String name, Object value, boolean encodeSlashInPath) {
+            return this;
+        }
+
+        @Override
+        public UriBuilder resolveTemplateFromEncoded(String name, Object value) {
+            return this;
+        }
+
+        @Override
+        public UriBuilder resolveTemplates(Map<String, Object> templateValues) {
+            return this;
+        }
+
+        @Override
+        public UriBuilder resolveTemplates(Map<String, Object> templateValues, boolean encodeSlashInPath) {
+            return this;
+        }
+
+        @Override
+        public UriBuilder resolveTemplatesFromEncoded(Map<String, Object> templateValues) {
+            return this;
+        }
+
+        @Override
+        public URI buildFromMap(Map<String, ?> values) {
+            return build();
+        }
+
+        @Override
+        public URI buildFromMap(Map<String, ?> values, boolean encodeSlashInPath) {
+            return build();
+        }
+
+        @Override
+        public URI buildFromEncodedMap(Map<String, ?> values) {
+            return build();
+        }
+
+        @Override
+        public URI build(Object... values) {
+            return buildInternal();
+        }
+
+        @Override
+        public URI build(Object[] values, boolean encodeSlashInPath) {
+            return buildInternal();
+        }
+
+        @Override
+        public URI buildFromEncoded(Object... values) {
+            return buildInternal();
+        }
+
+        @Override
+        public String toTemplate() {
+            return buildInternal().toString();
+        }
+
+        private URI buildInternal() {
+            if (schemeSpecificPart != null && scheme != null && host == null) {
+                return URI.create(scheme + ":" + schemeSpecificPart);
+            }
+            return URI.create(String.format("%s://%s%s%s%s",
+                    scheme != null ? scheme : "http",
+                    host != null ? host : "localhost",
+                    port >= 0 ? ":" + port : "",
+                    path != null ? path : "",
+                    query != null ? "?" + query : ""));
         }
     }
 }

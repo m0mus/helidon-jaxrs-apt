@@ -1,3 +1,5 @@
 io.helidon.examples.jaxrs.apt.test.filter.Priority100Filter
+io.helidon.examples.jaxrs.apt.test.filter.ResponseCoverageFilter
 io.helidon.examples.jaxrs.apt.test.filter.OrderTrackingFilter
 io.helidon.examples.jaxrs.apt.test.filter.Priority300Filter
+io.helidon.examples.jaxrs.apt.test.filter.AuditFilter
