@@ -26,6 +26,8 @@ Maven coordinates:
 - `@Context` proxies for `UriInfo`, `HttpHeaders`, `SecurityContext`,
   and `ResourceInfo`
 - `@Priority` ordering and `@NameBinding` recognition
+- Entity stream manipulation via `setEntityStream()` in both pre-matching and post-matching filters
+- Entity replacement via `setEntity()` in response filters
 
 ## What this module does not support
 
@@ -74,7 +76,8 @@ You can also call `JaxRsFilterSupport.register(routing)` directly.
 
 - `ResourceInfo` is present but carries no matched resource metadata.
 - `abortWith(...)` on a request filter short-circuits routing.
-- Response filters can modify status and headers before send.
+- Response filters can modify status, headers, and entity before send.
+- Request filters can replace the entity stream using `setEntityStream()` for content transformation.
 
 ## Name bindings
 

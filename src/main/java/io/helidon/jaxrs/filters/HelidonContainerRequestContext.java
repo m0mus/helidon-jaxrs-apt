@@ -29,6 +29,7 @@ public class HelidonContainerRequestContext implements ContainerRequestContext {
     private boolean aborted = false;
     private int abortStatus = 0;
     private String abortMessage;
+    private InputStream entityStream;
 
     public HelidonContainerRequestContext(ServerRequest request) {
         this.request = request;
@@ -171,12 +172,12 @@ public class HelidonContainerRequestContext implements ContainerRequestContext {
 
     @Override
     public InputStream getEntityStream() {
-        return request.content().inputStream();
+        return entityStream != null ? entityStream : request.content().inputStream();
     }
 
     @Override
     public void setEntityStream(InputStream input) {
-        throw new UnsupportedOperationException("setEntityStream not supported");
+        this.entityStream = input;
     }
 
     @Override

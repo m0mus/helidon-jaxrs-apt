@@ -45,6 +45,9 @@ public class PreMatchingRequestContext implements ContainerRequestContext {
     // Security context
     private SecurityContext securityContext;
 
+    // Entity stream
+    private InputStream entityStream;
+
     public PreMatchingRequestContext(RoutingRequest request) {
         this.request = request;
         this.originalPrologue = request.prologue();
@@ -299,12 +302,12 @@ public class PreMatchingRequestContext implements ContainerRequestContext {
 
     @Override
     public InputStream getEntityStream() {
-        return request.content().inputStream();
+        return entityStream != null ? entityStream : request.content().inputStream();
     }
 
     @Override
     public void setEntityStream(InputStream input) {
-        throw new UnsupportedOperationException("setEntityStream not supported in pre-matching filters");
+        this.entityStream = input;
     }
 
     // ========== Security Context ==========
