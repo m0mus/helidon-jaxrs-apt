@@ -27,7 +27,16 @@ import java.util.concurrent.CompletionStage;
 public class SimpleRuntimeDelegate extends RuntimeDelegate {
 
     static {
-        RuntimeDelegate.setInstance(new SimpleRuntimeDelegate());
+        boolean shouldSet;
+        try {
+            RuntimeDelegate.getInstance();
+            shouldSet = false;
+        } catch (RuntimeException ex) {
+            shouldSet = true;
+        }
+        if (shouldSet) {
+            RuntimeDelegate.setInstance(new SimpleRuntimeDelegate());
+        }
     }
 
     /**

@@ -130,6 +130,26 @@ public class JaxRsFilter implements Filter, HttpEntryPoint.Interceptor {
                 }
             }
         }
+        for (var entry : responseContext.getStringHeaders().entrySet()) {
+            for (var value : entry.getValue()) {
+                if (value != null && !headerValuePresent(responseContext.getHeaders(), entry.getKey(), value)) {
+                    res.header(io.helidon.http.HeaderNames.create(entry.getKey()), value);
+                }
+            }
+        }
+    }
+
+    private boolean headerValuePresent(Map<String, List<Object>> headers, String name, String value) {
+        List<Object> existing = headers.get(name);
+        if (existing == null) {
+            return false;
+        }
+        for (Object item : existing) {
+            if (item != null && value.equals(item.toString())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void sendAbortResponse(ServerResponse res, HelidonContainerRequestContext requestContext) {

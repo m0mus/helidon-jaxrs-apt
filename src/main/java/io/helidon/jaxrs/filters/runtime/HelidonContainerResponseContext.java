@@ -37,11 +37,33 @@ public class HelidonContainerResponseContext implements ContainerResponseContext
 
     @Override
     public Response.StatusType getStatusInfo() {
-        return Response.Status.fromStatusCode(status);
+        Response.Status statusEnum = Response.Status.fromStatusCode(status);
+        if (statusEnum != null) {
+            return statusEnum;
+        }
+        return new Response.StatusType() {
+            @Override
+            public int getStatusCode() {
+                return status;
+            }
+
+            @Override
+            public Response.Status.Family getFamily() {
+                return Response.Status.Family.familyOf(status);
+            }
+
+            @Override
+            public String getReasonPhrase() {
+                return "";
+            }
+        };
     }
 
     @Override
     public void setStatusInfo(Response.StatusType statusInfo) {
+        if (statusInfo == null) {
+            return;
+        }
         this.status = statusInfo.getStatusCode();
     }
 
@@ -59,7 +81,17 @@ public class HelidonContainerResponseContext implements ContainerResponseContext
     public String getHeaderString(String name) {
         List<String> values = stringHeaders.get(name);
         if (values == null || values.isEmpty()) {
-            return null;
+            List<Object> rawValues = headers.get(name);
+            if (rawValues == null || rawValues.isEmpty()) {
+                return null;
+            }
+            List<String> mapped = new ArrayList<>();
+            for (Object value : rawValues) {
+                if (value != null) {
+                    mapped.add(value.toString());
+                }
+            }
+            return mapped.isEmpty() ? null : String.join(",", mapped);
         }
         return String.join(",", values);
     }
