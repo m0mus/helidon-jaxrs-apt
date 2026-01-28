@@ -1,4 +1,4 @@
-package io.helidon.jaxrs.filters.test.runtime;
+package io.helidon.jaxrs.filters.test.unit;
 
 import io.helidon.jaxrs.filters.FilterContext;
 import io.helidon.jaxrs.filters.HttpHeadersProxy;

@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-    Helidon JAX-RS APT - Compile-time JAX-RS annotation processing for Helidon WebServer
+    Helidon JAX-RS Filters - Filter-only JAX-RS support for Helidon WebServer
 
-    This project demonstrates build-time code generation from JAX-RS annotations,
-    producing optimized Helidon routing code without runtime reflection.
+    This project runs JAX-RS request/response filters without any JAX-RS
+    resources, annotation processing, or runtime routing.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -17,10 +17,10 @@
         <relativePath/>
     </parent>
 
-    <groupId>io.helidon.examples</groupId>
-    <artifactId>helidon-examples-jaxrs-apt</artifactId>
+    <groupId>io.helidon.jaxrs</groupId>
+    <artifactId>helidon-jaxrs-filters</artifactId>
     <version>1.0-SNAPSHOT</version>
-    <name>Helidon JAX-RS Filters</name>
+    <name>Helidon JAX-RS Filter Support</name>
     <description>Filter-only JAX-RS ContainerRequest/ResponseFilter support for Helidon WebServer</description>
 
     <dependencies>
