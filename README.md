@@ -5,6 +5,18 @@ in Helidon WebServer without any JAX-RS resources or runtime.
 
 Packages live under `io.helidon.jaxrs.filters`.
 
+## Dependency
+
+Maven coordinates:
+
+```xml
+<dependency>
+    <groupId>io.helidon.jaxrs</groupId>
+    <artifactId>helidon-jaxrs-filters</artifactId>
+    <version>1.0-SNAPSHOT</version>
+</dependency>
+```
+
 ## What this module supports
 
 - ServiceLoader discovery of request and response filters
