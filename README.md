@@ -8,7 +8,7 @@ in Helidon WebServer without any JAX-RS resources or runtime.
 - ServiceLoader discovery of request and response filters
 - `@PreMatching` filters executed as Helidon WebServer filters
 - Post-matching filters executed through an `HttpEntryPoint.Interceptor`
-  (implemented by `JaxRsFilterOnlyFilter`)
+  (implemented by `JaxRsFilter`)
 - `@Context` proxies for `UriInfo`, `HttpHeaders`, `SecurityContext`,
   and `ResourceInfo`
 - `@Priority` ordering and `@NameBinding` recognition
@@ -51,7 +51,7 @@ You can also call `JaxRsFilterSupport.register(routing)` directly.
 - Pre-matching: implement `@PreMatching` on a `ContainerRequestFilter`. These
   run before routing and can update the request URI or method.
 - Post-matching: all non-pre-matching request filters and response filters run
-  through `JaxRsFilterOnlyFilter`, which also implements
+  through `JaxRsFilter`, which also implements
   `HttpEntryPoint.Interceptor`.
 
 ## Name bindings
@@ -67,3 +67,4 @@ Run:
 ```
 mvn test
 ```
+

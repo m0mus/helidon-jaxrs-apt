@@ -9,7 +9,7 @@ The runtime is intentionally small and focused on filter-only execution:
 - `JaxRsContextFilter` registers `UriInfo`, `HttpHeaders`, and
   `SecurityContext` in the Helidon request context.
 - `JaxRsPreMatchingFilter` runs `@PreMatching` filters before routing.
-- `JaxRsFilterOnlyFilter` wraps post-matching request/response filters. It
+- `JaxRsFilter` wraps post-matching request/response filters. It
   implements `HttpEntryPoint.Interceptor` and is registered as a Helidon
   filter so it runs for every route.
 
@@ -44,3 +44,4 @@ This module does not include:
 - Annotation processing
 - Interceptors or exception mappers
 - JAX-RS parameter extraction
+
