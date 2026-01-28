@@ -2,6 +2,8 @@
 
 This module provides filter-only JAX-RS support for Helidon WebServer.
 
+Core API package: `io.helidon.jaxrs.filters`.
+
 ## 1) Add JAX-RS filters
 
 Create `ContainerRequestFilter` and/or `ContainerResponseFilter` implementations
@@ -14,6 +16,8 @@ and register them via ServiceLoader:
 ## 2) Register the feature
 
 ```
+import io.helidon.jaxrs.filters.JaxRsFilterFeature;
+
 HttpRouting.builder()
         .addFeature(JaxRsFilterFeature::new)
         .build();

@@ -12,6 +12,8 @@ The runtime is intentionally small and focused on filter-only execution:
 - `JaxRsFilter` wraps post-matching request/response filters. It
   implements `HttpEntryPoint.Interceptor` and is registered as a Helidon
   filter so it runs for every route.
+- `SimpleRuntimeDelegate` supplies minimal JAX-RS header parsing and
+  response builder support for filters only.
 
 ## Context injection
 
@@ -35,6 +37,11 @@ JAX-RS contract.
 Name bindings are discovered from `@NameBinding` annotations, but without
 resources there is no matching context. Name-bound filters are registered but
 will not run in filter-only mode.
+
+## Compatibility
+
+This module is intended for Helidon WebServer only and does not target
+coexistence with a full JAX-RS runtime.
 
 ## Limitations
 
