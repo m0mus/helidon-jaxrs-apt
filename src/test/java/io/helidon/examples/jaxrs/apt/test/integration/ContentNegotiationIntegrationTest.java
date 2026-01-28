@@ -1,6 +1,7 @@
 package io.helidon.examples.jaxrs.apt.test.integration;
 
 import io.helidon.examples.jaxrs.apt.test.resources.TestContentNegotiationResource$$JaxRsRouting;
+import io.helidon.examples.jaxrs.apt.test.util.FilterOrderTracker;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.Status;
 import io.helidon.webclient.api.HttpClientResponse;
@@ -52,6 +53,21 @@ class ContentNegotiationIntegrationTest {
 
             assertThat(response.status(), is(Status.NOT_ACCEPTABLE_406));
         }
+    }
+
+    @Test
+    @DisplayName("Response filters are skipped on negotiation failures")
+    void testResponseFiltersSkippedOnNegotiationFailure() {
+        FilterOrderTracker.clear();
+
+        try (HttpClientResponse response = client.get("/content/json")
+                .header(HeaderNames.ACCEPT, "text/html")
+                .request()) {
+
+            assertThat(response.status(), is(Status.NOT_ACCEPTABLE_406));
+        }
+
+        assertThat(FilterOrderTracker.getResponseFilterOrder(), is(empty()));
     }
 
     @Test

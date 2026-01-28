@@ -2,6 +2,8 @@ package io.helidon.examples.jaxrs.apt.test.integration;
 
 import io.helidon.examples.jaxrs.apt.test.resources.TestFilterResource$$JaxRsRouting;
 import io.helidon.examples.jaxrs.apt.test.util.FilterOrderTracker;
+import io.helidon.examples.jaxrs.apt.test.filter.ThrowingResponseFilter;
+import io.helidon.http.HeaderNames;
 import io.helidon.webclient.api.WebClient;
 import io.helidon.webserver.testing.junit5.ServerTest;
 import io.helidon.webserver.testing.junit5.SetUpRoute;
@@ -197,5 +199,37 @@ class FilterIntegrationTest {
         }
 
         assertThat(lastRequestIndex, lessThan(firstResponseIndex));
+    }
+
+    @Test
+    @DisplayName("Request filter abort stops processing and skips response filters")
+    void testRequestFilterAbort() {
+        FilterOrderTracker.clear();
+
+        var response = client.get("/filter/abort").request();
+
+        assertThat(response.status().code(), is(403));
+
+        List<String> requestOrder = FilterOrderTracker.getRequestFilterOrder();
+        assertThat(requestOrder, hasItem("AbortFilter"));
+        assertThat(requestOrder, not(hasItem("OrderTrackingFilter")));
+
+        List<String> responseOrder = FilterOrderTracker.getResponseFilterOrder();
+        assertThat(responseOrder, is(empty()));
+    }
+
+    @Test
+    @DisplayName("Response filter IOException is suppressed for error responses")
+    void testResponseFilterIOExceptionSuppressed() {
+        FilterOrderTracker.clear();
+
+        var response = client.get("/filter/error")
+                .header(HeaderNames.create(ThrowingResponseFilter.THROW_HEADER), "true")
+                .request();
+
+        assertThat(response.status().code(), is(404));
+
+        List<String> responseOrder = FilterOrderTracker.getResponseFilterOrder();
+        assertThat(responseOrder, hasItem("ThrowingResponseFilter"));
     }
 }
